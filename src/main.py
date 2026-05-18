@@ -142,7 +142,6 @@ async def main_loop() -> None:
     def _activate() -> None:
         nonlocal state, buffer, silence_chunks, activation_time
         _interrupt()
-        recorder.clear_queue()
         buffer          = []
         silence_chunks  = 0
         activation_time = time.monotonic()
@@ -257,11 +256,13 @@ async def _handle_response(
     stt_model,
     shutdown_event: asyncio.Event,
 ) -> str:
+    # 1. Measure Speech-to-Text (STT) latency
+    t_stt_start = time.perf_counter()
     audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
     
-    # Transcribe offline
     result = await asyncio.to_thread(stt_model.transcribe, audio_np, fp16=False)
     text = result.get("text", "").strip()
+    stt_ms = int((time.perf_counter() - t_stt_start) * 1000)
 
     if not text:
         return ""
@@ -276,13 +277,18 @@ async def _handle_response(
         shutdown_event.set()
         return "Shutting down."
 
-    # Process thoughts
+    # 2. Measure LLM Inference & TTS Streaming latency
+    t_llm_start = time.perf_counter()
     show_status(SPEAKING, "Generating reply...")
     stream = engine.get_stream(None, text)
     
     # Stream the text and trigger asynchronous speech
     print("Jarvis: ", end="", flush=True)
     full_text = await asyncio.to_thread(tts.stream_text, stream)
+    llm_ms = int((time.perf_counter() - t_llm_start) * 1000)
+    
+    total_ms = stt_ms + llm_ms
+    print(f"\n\033[2m[Latency: STT: {stt_ms}ms | LLM + TTS: {llm_ms}ms | Total: {total_ms}ms]\033[0m")
     
     await asyncio.sleep(0.3)
     return full_text
