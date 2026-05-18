@@ -99,6 +99,16 @@ python src/main.py
 ```
 Say **"Hey Jarvis"** (or whatever wake word model you have placed in `assets/wakeword_models/`) to trigger the conversation!
 
+### Output Examples & CLI Showcase
+
+Below are actual screenshots of the running Jarvis Edge Voice Assistant terminal interface, demonstrating the clean log-free console status tracking and the real-time latency reporting:
+
+#### Wake-Word Gated Listening & Capturing
+![Jarvis Edge Assistant Listening](images/Screenshot%202026-05-18%20141736.png)
+
+#### Real-Time Interaction & Latency Metrics
+![Jarvis Edge Assistant Latency Metrics](images/Screenshot%202026-05-18%20141801.png)
+
 ---
 
 ## 4. How to Train Your Own Custom Wake Word Model
