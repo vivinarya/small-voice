@@ -99,8 +99,6 @@ class TTSStreamer:
         full_text = ""
         sentence_endings = {'. ', '? ', '! ', '.\n', '?\n', '!\n'}
         
-        print("\nAssistant: ", end="", flush=True)
-
         for chunk in text_iterator:
             if not chunk: continue
             print(chunk, end="", flush=True)
