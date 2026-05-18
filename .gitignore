@@ -1,0 +1,21 @@
+# Large binary models, local databases and external executables
+assets/
+
+# Python caching and environment directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pip-cache/
+
+# IDE settings and OS-specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
