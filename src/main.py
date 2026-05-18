@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 import sounddevice as sd
 
-# Force standard streams to support UTF-8 encoding to prevent Unicode errors on Windows
+# Enable UTF-8 encoding on standard streams to support colored characters on Windows
 try:
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
@@ -15,18 +15,18 @@ try:
 except Exception:
     pass
 
-# Suppress deep C++ logging from TensorFlow, LiteRT, ONNX, and Whisper
+# Suppress underlying C-level warnings/logging from TensorFlow, LiteRT, and Whisper
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['GLOG_minloglevel'] = '3'
 warnings.filterwarnings('ignore')
 
-# Redirect stderr to suppress C-level startup warnings from PortAudio/LiteRT/Whisper
+# Temporarily redirect stderr to suppress library load warnings from PortAudio & Whisper
 stderr_backup = sys.stderr
 sys.stderr = open(os.devnull, 'w')
 
 import logging
 
-# Configure logging to write ONLY to a file to keep the console completely clean
+# Configure file-only logger to prevent debug traces from corrupting the clean console CLI
 log_file = "app.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -43,30 +43,30 @@ from audio.wakeword import WakeWordDetector
 from inference.engine import GemmaEngine
 from synthesis.tts_stream import TTSStreamer
 
-# Restore stderr after libraries are loaded
+# Restore stderr after libraries are fully imported
 sys.stderr.close()
 sys.stderr = stderr_backup
 
-# ── Tuning knobs ──────────────────────────────────────────────────────────────
+# DSP and silence detection thresholds
 WAKEWORD_COOLDOWN  = 2.0   
 LISTEN_TIMEOUT_S   = 5.0   
-SILENCE_CHUNKS_END = 15    # 15 × 80ms = 1200ms silence → utterance done
-MIN_SPEECH_BYTES   = 16000 # ~0.5s — discard shorter captures
+SILENCE_CHUNKS_END = 15    # 15 * 80ms chunks = 1.2s silence to detect end of query
+MIN_SPEECH_BYTES   = 16000 # Minimum ~0.5s recording threshold to filter noise
 
-# Shutdown keywords
+# Shutdown triggers
 _SHUTDOWN_KW = {"shutdown", "shut down", "power off", "turn off", "exit", "quit", "goodbye"}
 
 def _is_shutdown(text: str) -> bool:
     low = text.lower()
     return any(kw in low for kw in _SHUTDOWN_KW)
 
-# States
+# State Machine States
 IDLE      = "IDLE"      
 LISTENING = "LISTENING"  
 CAPTURING = "CAPTURING"  
 SPEAKING  = "SPEAKING"
 
-# ── CLI Interface Helpers ─────────────────────────────────────────────────────
+# CLI Helpers
 def clear_terminal():
     os.system('cls' if os.name == 'nt' else 'clear')
 
@@ -87,19 +87,18 @@ def show_status(state: str, details: str = ""):
     }
     icon = status_icons.get(state, "LOADING")
     
-    # Save cursor, clear status line, write colored status, and restore cursor
-    sys.stdout.write("\033[s") # Save cursor position
-    sys.stdout.write(f"\033[H\033[2K") # Go to top line and clear
+    # Write status to the top line using ANSI cursor positions
+    sys.stdout.write("\033[s") 
+    sys.stdout.write(f"\033[H\033[2K") 
     sys.stdout.write(f"\r\033[1;36mSTATUS: [{icon}] \033[0;37m{details}\033[0m\n")
-    sys.stdout.write("\033[u") # Restore cursor position
+    sys.stdout.write("\033[u") 
     sys.stdout.flush()
 
-# ── Main Event Loop ───────────────────────────────────────────────────────────
+# Main Thread Loop
 async def main_loop() -> None:
     draw_header()
     print("\n[SYSTEM] Loading offline AI models into memory. Please wait...", flush=True)
 
-    # Load models
     import whisper
     stt_model = whisper.load_model("base.en")
     
@@ -116,10 +115,8 @@ async def main_loop() -> None:
         return
 
     engine = GemmaEngine(model_path=model_path)
-
     recorder.start()
     
-    # Redraw the clean interface
     draw_header()
     print("\n" * 2) 
     show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
@@ -166,12 +163,11 @@ async def main_loop() -> None:
                     await asyncio.sleep(0.005)
                     continue
 
-            #State handlers
+            # State Machine Handlers
             if state == IDLE:
                 pass
 
             elif state == LISTENING:
-                # Timeout if user never speaks
                 if (time.monotonic() - activation_time) > LISTEN_TIMEOUT_S:
                     show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
                     state = IDLE
@@ -256,7 +252,6 @@ async def _handle_response(
     stt_model,
     shutdown_event: asyncio.Event,
 ) -> str:
-    # 1. Measure Speech-to-Text (STT) latency
     t_stt_start = time.perf_counter()
     audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
     
@@ -267,22 +262,18 @@ async def _handle_response(
     if not text:
         return ""
 
-    # Display what the user asked
     print(f"\nUser: {text}")
 
-    # Shutdown keyword check
     if _is_shutdown(text):
         print("Jarvis: Shutting down. Goodbye.")
         await asyncio.to_thread(tts.speak, "Shutting down. Goodbye.")
         shutdown_event.set()
         return "Shutting down."
 
-    # 2. Measure LLM Inference & TTS Streaming latency
     t_llm_start = time.perf_counter()
     show_status(SPEAKING, "Generating reply...")
     stream = engine.get_stream(None, text)
     
-    # Stream the text and trigger asynchronous speech
     print("Jarvis: ", end="", flush=True)
     full_text = await asyncio.to_thread(tts.stream_text, stream)
     llm_ms = int((time.perf_counter() - t_llm_start) * 1000)
@@ -295,8 +286,6 @@ async def _handle_response(
 
 
 if __name__ == "__main__":
-    # Enable colored ANSI escape codes in Windows Terminal
     if os.name == 'nt':
         os.system('color')
     asyncio.run(main_loop())
-
