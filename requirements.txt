@@ -5,3 +5,4 @@ tqdm
 openai-whisper
 soundfile
 onnxruntime
+litert-lm

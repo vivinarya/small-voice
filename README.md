@@ -110,7 +110,7 @@ tiny-voice-assistant/
 
 #### 4.4 Download a Pre-trained Wake Word Model
 
-* If you want to use the default wake word immediately, you can download a pre-trained openwakeword `.onnx` model directly from the [openWakeWord Pre-trained Repository](https://github.com/dscripka/openWakeWord/tree/main/openwakeword/resources/models) and save it under `assets/wakeword_models/`.
+* If you want to use the default wake word immediately, you can download a pre-trained openwakeword `.onnx` model directly from this [Colab Notebook](https://colab.research.google.com/drive/1q1oe2zOyZp7UsB3jJiQ1IFn8z5YfjwEb?usp=sharing) and save it under `assets/wakeword_models/`.
 
 ---
 
