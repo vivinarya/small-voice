@@ -88,7 +88,7 @@ tiny-voice-assistant/
 * Place both files inside the `assets/piper_voices/` directory.
 
 #### 3.4 Download a Pre-trained Wake Word Model
-* If you want to use the default wake word immediately, you can download a pre-trained openwakeword `.onnx` model (like `hey_jarvis`, `alexa`, `ok_google`) directly from the [openWakeWord Pre-trained Repository](https://github.com/dscripka/openWakeWord/tree/main/openwakeword/resources/models) and save it under `assets/wakeword_models/`.
+* If you want to use the default wake word immediately, you can download a pre-trained openwakeword `.onnx` model (like `hey_jarvis`, `alexa`, `ok_google`) directly from the [openWakeWord Pre-trained Repository](https://github.com/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb) and save it under `assets/wakeword_models/`.
 
 ---
 
