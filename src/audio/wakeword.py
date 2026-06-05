@@ -36,6 +36,6 @@ class WakeWordDetector:
         self.oww_model.predict(audio_chunk)
 
         for name in self.model_names:
-            if self.oww_model.prediction_buffer[name][-1] > 0.5:
+            if self.oww_model.prediction_buffer[name][-1] > 0.08:
                 return True, name
         return False, None

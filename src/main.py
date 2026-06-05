@@ -5,6 +5,55 @@ import time
 import warnings
 import numpy as np
 import sounddevice as sd
+import websockets
+import json
+
+CONNECTED_CLIENTS = set()
+ui_wake_event = asyncio.Event()
+ui_stop_event = asyncio.Event()
+
+async def broadcast(message_dict):
+    if CONNECTED_CLIENTS:
+        msg = json.dumps(message_dict)
+        websockets.broadcast(CONNECTED_CLIENTS, msg)
+
+async def ws_handler(websocket):
+    CONNECTED_CLIENTS.add(websocket)
+    try:
+        async for message in websocket:
+            data = json.loads(message)
+            if data.get("type") == "get_graph":
+                wiki_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge", "vault", "wiki", "entities")
+                nodes = []
+                if os.path.exists(wiki_dir):
+                    for fn in os.listdir(wiki_dir):
+                        if fn.endswith(".md"):
+                            path = os.path.join(wiki_dir, fn)
+                            with open(path, "r", encoding="utf-8") as f:
+                                content = f.read()
+                            nodes.append({
+                                "id": fn.replace(".md", ""),
+                                "label": fn.replace(".md", "").replace("-", " ").title(),
+                                "desc": content
+                            })
+                await websocket.send(json.dumps({"type": "graph_data", "nodes": nodes}))
+            elif data.get("type") == "update_node":
+                node_id = data.get("id")
+                content = data.get("content")
+                if node_id and content:
+                    wiki_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge", "vault", "wiki", "entities")
+                    path = os.path.join(wiki_dir, node_id + ".md")
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    print(f"\n[WS] Updated node {node_id}")
+            elif data.get("type") == "start_listening":
+                ui_wake_event.set()
+            elif data.get("type") == "stop_listening":
+                ui_stop_event.set()
+    except Exception as e:
+        pass
+    finally:
+        CONNECTED_CLIENTS.remove(websocket)
 
 # Enable UTF-8 encoding on standard streams to support colored characters on Windows
 try:
@@ -94,8 +143,20 @@ def show_status(state: str, details: str = ""):
     sys.stdout.write("\033[u") 
     sys.stdout.flush()
 
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(broadcast({"type": "state", "state": state.lower(), "details": details}))
+    except Exception:
+        pass
+
 # Main Thread Loop
 async def main_loop() -> None:
+    # Start WebSocket Server
+    try:
+        await websockets.serve(ws_handler, "localhost", 8765)
+    except Exception as e:
+        print(f"[WS] Failed to start WebSocket server: {e}")
+
     draw_header()
     print("\n[SYSTEM] Loading offline AI models into memory. Please wait...", flush=True)
 
@@ -152,11 +213,21 @@ async def main_loop() -> None:
             if chunk is None:
                 await asyncio.sleep(0.005)
                 continue
+                
+            if ui_stop_event.is_set():
+                ui_stop_event.clear()
+                _interrupt()
+                state = IDLE
+                recorder.clear_queue()
+                show_status(IDLE, "Interrupted by UI. Say 'Hey Jarvis' to wake me up.")
+                continue
+                
             detected, name = wakeword.check(chunk)
             
             if state != CAPTURING:
                 elapsed_since_ww = time.monotonic() - last_ww_time
-                if elapsed_since_ww >= WAKEWORD_COOLDOWN and detected:
+                if (elapsed_since_ww >= WAKEWORD_COOLDOWN and detected) or ui_wake_event.is_set():
+                    ui_wake_event.clear()
                     last_ww_time = time.monotonic()
                     show_status(LISTENING, "Wake word detected!")
                     _activate()
@@ -261,8 +332,17 @@ async def _handle_response(
 ) -> str:
     t_stt_start = time.perf_counter()
     audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+    # Dynamically inject knowledge graph entities into Whisper's initial prompt to guide phonetics
+    import os
+    wiki_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge", "vault", "wiki", "entities")
+    entity_names = ["Bangalore", "Whitefield", "Reachy Mini", "Dr. Anjali"]
+    if os.path.exists(wiki_dir):
+        from_files = [fn.replace(".md", "").replace("-", " ").title() for fn in os.listdir(wiki_dir) if fn.endswith(".md")]
+        entity_names.extend(from_files)
     
-    result = await asyncio.to_thread(stt_model.transcribe, audio_np, fp16=False)
+    stt_prompt = ", ".join(set(entity_names))
+    
+    result = await asyncio.to_thread(stt_model.transcribe, audio_np, fp16=False, initial_prompt=stt_prompt)
     text = result.get("text", "").strip()
     stt_ms = int((time.perf_counter() - t_stt_start) * 1000)
 
@@ -286,6 +366,7 @@ async def _handle_response(
     
     wiki_context = fast_wiki_router(text)
     prompt_text = text
+    loop = asyncio.get_running_loop()
     
     # Check explicitly for update commands first!
     update_triggers = ["update yourself", "update your self", "learn about", "search the internet and update", "update it"]
@@ -304,7 +385,14 @@ async def _handle_response(
         
         # Bypass the LLM for immediate 0ms TTFT response
         def hardcoded_stream():
-            yield "I am researching that topic on the internet right now, and compiling the facts into my permanent knowledge vault!"
+            words = "I am researching that topic on the internet right now, and compiling the facts into my permanent knowledge vault!".split(" ")
+            for i, w in enumerate(words):
+                chunk = w + (" " if i < len(words)-1 else "")
+                try:
+                    asyncio.run_coroutine_threadsafe(broadcast({"type": "text", "text": chunk}), loop)
+                except:
+                    pass
+                yield chunk
         
         print("\nJarvis: ", end="", flush=True)
         return await asyncio.to_thread(tts.stream_text, hardcoded_stream())
@@ -327,6 +415,10 @@ async def _handle_response(
                 ttft_ms = int((time.perf_counter() - t_llm_start) * 1000)
                 print(f"\n\033[2m[TTFT (Time-to-First-Token): {ttft_ms}ms]\033[0m")
                 first = False
+            try:
+                asyncio.run_coroutine_threadsafe(broadcast({"type": "text", "text": chunk}), loop)
+            except Exception:
+                pass
             yield chunk
 
     print("Jarvis: ", end="", flush=True)

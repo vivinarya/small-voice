@@ -1,8 +1,11 @@
 numpy
 sounddevice
-openwakeword
+openwakeword>=0.5.1
 tqdm
 openai-whisper
+duckduckgo-search>=6.1.7
+requests>=2.31.0
+websockets>=12.0
 soundfile
 onnxruntime
 litert-lm

@@ -142,8 +142,10 @@ Say **"Hey Jarvis"** to trigger the conversation!
 Below are actual screenshots of the running Jarvis Edge Voice Assistant terminal interface, demonstrating the clean log-free console status tracking and the real-time latency reporting:
 
 #### Wake-Word Gated Listening & Capturing
+![Wake-Word Gated Listening & Capturing](images/image.png)
 
 #### Real-Time Interaction & Latency Metrics
+![Real-Time Interaction & Latency Metrics](images/image%20copy.png)
 
 ---
 

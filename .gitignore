@@ -25,3 +25,9 @@ Thumbs.db
 
 # Staged web dumps
 src/knowledge/vault/raw/incoming_web/*.json
+
+# Logs
+app.log
+
+# Node
+node_modules/
