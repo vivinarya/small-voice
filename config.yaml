@@ -1,0 +1,38 @@
+# config.yaml — Pluggable Edge Assistant configuration
+# Windows / development defaults (LiteRT-LM, Whisper, Piper)
+#
+# Environment variable overrides (highest precedence, no file edit needed):
+#   ENGINE_BACKEND, MODEL_PATH, N_GPU_LAYERS
+#   STT_BACKEND, STT_MODEL
+#   TTS_BACKEND, TTS_VOICE_PATH
+#   EMBED_BACKEND, INDEX_DIR, RETRIEVAL_K
+
+engine:
+  backend: litert                          # litert | llama_cpp
+  model_path: assets/gemma-4-E4B-it.litertlm
+  n_gpu_layers: 0                          # ignored by litert; -1 = full CUDA offload on Orin
+
+stt:
+  backend: faster_whisper                  # whisper | faster_whisper
+  # Accuracy/latency tradeoff (Req 2.13 vs 2.1):
+  # small.en int8 on CPU is typically within ≤ 600ms budget (faster-whisper CTranslate2).
+  # If ≤ 600ms cannot be met, fall back to: model: base.en (with compute_type: int8)
+  model: small.en
+  compute_type: int8                        # int8 = CTranslate2 quantized (CPU); float16 = GPU
+
+tts:
+  backend: piper                           # piper | kokoro
+  # Current voice: en_US-lessac-medium (mid-tier, ~60MB)
+  # Higher quality options (download from https://huggingface.co/rhasspy/piper-voices):
+  #   en_US-lessac-high.onnx + en_US-lessac-high.onnx.json (~120MB) — more natural delivery
+  #   en_US-libritts-high.onnx + en_US-libritts-high.onnx.json (~120MB) — LibriTTS-trained, natural speech
+  # After downloading both files into assets/piper_voices/, update voice_path:
+  #   voice_path: assets/piper_voices/en_US-lessac-high.onnx
+  # Option B (highest quality): set backend: kokoro and install kokoro-onnx + the Kokoro ONNX model.
+  voice_path: assets/piper_voices/en_US-lessac-medium.onnx
+
+retrieval:
+  embed_backend: minilm                    # minilm | bge_small
+  index_dir: data/index
+  k: 3                                     # top-k chunks to inject (1-5)
+  min_score: 0.25                          # relevance gate: chunks below this score are excluded (cosine similarity)

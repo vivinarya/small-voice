@@ -2,10 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Mic, Square } from "lucide-react";
 import { KnowledgeGraph } from "./components/KnowledgeGraph";
+import { TextbooksView } from "./components/TextbooksView";
 import { TextEffect } from "./components/TextEffect";
 
 type JarvisState = "idle" | "listening" | "processing" | "speaking";
-type AppView = "speak" | "graph";
+type AppView = "speak" | "graph" | "textbooks";
 
 const FONT = "'Plus Jakarta Sans', sans-serif";
 const BG = "#eae9e4";
@@ -14,16 +15,44 @@ const MUTED = "#a8a09a";
 const MINT = "#3DD68C";
 const DARK = "#1e1d1b";
 
-const RESPONSES = [
-  "Good evening. All systems are operating at peak efficiency. How may I assist you today?",
-  "Voice pattern recognized. I have already anticipated your three most likely requests.",
-  "Running a complete diagnostic now. Neural pathways online. Quantum core at ninety-eight percent.",
-  "I have analyzed the surrounding environment. No anomalies detected. Awaiting your instruction.",
-  "Encryption protocols are fully engaged. Your session is completely secure. You may proceed.",
-  "Predictive models suggest three optimal courses of action. Shall I walk you through them?",
-];
+// ─── Shared WebSocket hook ─────────────────────────────────────────────────────
+function useSharedWS(url: string) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const [ws, setWs] = useState<WebSocket | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const connect = () => {
+      const socket = new WebSocket(url);
+      wsRef.current = socket;
+      socket.onopen = () => {
+        if (!cancelled) setWs(socket);
+      };
+      socket.onclose = () => {
+        if (!cancelled) {
+          wsRef.current = null;
+          setWs(null);
+          setTimeout(connect, 2000);
+        }
+      };
+    };
+    connect();
+    return () => {
+      cancelled = true;
+      wsRef.current?.close();
+    };
+  }, [url]);
+
+  return ws;
+}
 
 // ─── Nav pill ─────────────────────────────────────────────────────────────────
+const NAV_LABELS: Record<AppView, string> = {
+  speak: "Jarvis",
+  graph: "Knowledge Graph",
+  textbooks: "Textbooks",
+};
+
 function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => void }) {
   return (
     <motion.div
@@ -42,7 +71,7 @@ function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => 
         position: "relative",
       }}
     >
-      {(["speak", "graph"] as AppView[]).map((v) => {
+      {(["speak", "graph", "textbooks"] as AppView[]).map((v) => {
         const active = view === v;
         return (
           <motion.button
@@ -62,7 +91,7 @@ function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => 
               letterSpacing: "0.015em",
               outline: "none",
               zIndex: 1,
-              transition: "color 0.25s ease, font-weight 0.25s ease",
+              transition: "color 0.25s ease",
             }}
           >
             {active && (
@@ -78,15 +107,13 @@ function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => 
                 transition={{ type: "spring", stiffness: 380, damping: 30 }}
               />
             )}
-            {v === "speak" ? "Jarvis" : "Knowledge Graph"}
+            {NAV_LABELS[v]}
           </motion.button>
         );
       })}
     </motion.div>
   );
 }
-
-// Removed StreamedText in favor of TextEffect
 
 // ─── Audio waveform bars ──────────────────────────────────────────────────────
 function AudioWave() {
@@ -221,10 +248,9 @@ function Controls({
 }
 
 // ─── Speak view ───────────────────────────────────────────────────────────────
-function SpeakView() {
+function SpeakView({ ws }: { ws: WebSocket | null }) {
   const [state, setState] = useState<JarvisState>("idle");
   const [streamedWords, setStreamedWords] = useState<string[]>([]);
-  const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -234,47 +260,42 @@ function SpeakView() {
   }, [streamedWords]);
 
   useEffect(() => {
-    const connect = () => {
-      ws.current = new WebSocket("ws://localhost:8765");
-      ws.current.onmessage = (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.type === "state") {
-            const s = data.state;
-            if (s === "idle") {
-              setState("idle");
-              setTimeout(() => setStreamedWords([]), 900);
-            } else if (s === "listening" || s === "capturing") {
-              setState("listening");
-              setStreamedWords([]);
-            } else if (s === "speaking") {
-              // We set "processing" until text arrives, then the UI handles words
-              setState("processing");
-            }
-          } else if (data.type === "text") {
-             setState("speaking");
-             if (data.text) setStreamedWords((p: string[]) => [...p, data.text]);
+    if (!ws) return;
+    const handler = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "state") {
+          const s = data.state;
+          if (s === "idle") {
+            setState("idle");
+            setTimeout(() => setStreamedWords([]), 900);
+          } else if (s === "listening" || s === "capturing") {
+            setState("listening");
+            setStreamedWords([]);
+          } else if (s === "speaking") {
+            setState("processing");
           }
-        } catch (err) {}
-      };
-      ws.current.onclose = () => {
-        setTimeout(connect, 2000);
-      };
+        } else if (data.type === "text") {
+          setState("speaking");
+          if (data.text) setStreamedWords((p) => [...p, data.text]);
+        }
+      } catch {}
     };
-    connect();
-    return () => ws.current?.close();
-  }, []);
+    ws.addEventListener("message", handler);
+    return () => ws.removeEventListener("message", handler);
+  }, [ws]);
 
   const handleStart = useCallback(() => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-       ws.current.send(JSON.stringify({ type: "start_listening" }));
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "start_listening" }));
     }
-  }, []);
+  }, [ws]);
+
   const handleStop = useCallback(() => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-       ws.current.send(JSON.stringify({ type: "stop_listening" }));
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "stop_listening" }));
     }
-  }, []);
+  }, [ws]);
 
   const showWords = streamedWords.length > 0 && state !== "idle";
   const showWave = state === "listening";
@@ -297,7 +318,6 @@ function SpeakView() {
         transition={{ duration: state === "listening" ? 2 : 4, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      {/* Text center area */}
       <main style={{
         flex: 1, display: "flex", flexDirection: "column",
         alignItems: "center", justifyContent: streamedWords.length > 0 ? "flex-start" : "center",
@@ -362,7 +382,6 @@ function SpeakView() {
         </AnimatePresence>
       </main>
 
-      {/* Bottom controls */}
       <motion.footer
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
@@ -396,6 +415,7 @@ function SpeakView() {
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [view, setView] = useState<AppView>("speak");
+  const ws = useSharedWS("ws://localhost:8765");
 
   return (
     <div
@@ -426,9 +446,9 @@ export default function App() {
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <SpeakView />
+            <SpeakView ws={ws} />
           </motion.div>
-        ) : (
+        ) : view === "graph" ? (
           <motion.div
             key="graph"
             style={{ flex: 1, display: "flex", flexDirection: "column", width: "100%", minHeight: 0 }}
@@ -437,7 +457,18 @@ export default function App() {
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <KnowledgeGraph />
+            <KnowledgeGraph ws={ws} />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="textbooks"
+            style={{ flex: 1, display: "flex", flexDirection: "column", width: "100%", minHeight: 0, overflowY: "auto" }}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <TextbooksView ws={ws} />
           </motion.div>
         )}
       </AnimatePresence>

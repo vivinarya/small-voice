@@ -1,0 +1,35 @@
+# config-orin.yaml — Jetson Orin Nano Super 8GB configuration
+#
+# Copy this to config.yaml on the Orin:
+#   cp config-orin.yaml config.yaml
+#
+# Or export env vars to override without touching files:
+#   export ENGINE_BACKEND=llama_cpp
+#   export MODEL_PATH=models/qwen2.5-1.5b-instruct-q4_k_m.gguf
+#
+# Differences from Windows dev config:
+#   - engine.backend: litert  ->  llama_cpp  (litert-lm has no aarch64 CUDA wheel)
+#   - engine.model_path: Gemma E4B  ->  Qwen2.5-1.5B Q4_K_M GGUF (~1 GB)
+#   - engine.n_gpu_layers: 0  ->  -1  (full CUDA offload on Ampere GPU)
+#   - stt.compute_type: int8  ->  float16  (uses Tensor cores on Orin Ampere GPU)
+
+engine:
+  backend: llama_cpp                                       # litert not supported on aarch64 CUDA
+  model_path: models/qwen2.5-1.5b-instruct-q4_k_m.gguf  # download with: scripts/download_models.sh
+  n_gpu_layers: -1                                         # -1 = offload all layers to GPU
+
+stt:
+  backend: faster_whisper
+  model: small.en
+  compute_type: float16                                    # fp16 Tensor core inference on Orin GPU
+                                                           # (use int8 if you see accuracy issues)
+
+tts:
+  backend: piper
+  voice_path: assets/piper_voices/en_US-lessac-medium.onnx  # same voice as Windows
+
+retrieval:
+  embed_backend: minilm                                    # same MiniLM index, no rebuild needed
+  index_dir: data/index
+  k: 3
+  min_score: 0.25

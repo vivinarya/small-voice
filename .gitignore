@@ -1,5 +1,6 @@
 # Large binary models, local databases and external executables
 assets/
+models/
 
 # Python caching and environment directories
 __pycache__/
@@ -10,6 +11,7 @@ __pycache__/
 env/
 venv/
 .venv/
+jarvis-env/
 pip-log.txt
 pip-delete-this-directory.txt
 .pip-cache/
@@ -29,5 +31,21 @@ src/knowledge/vault/raw/incoming_web/*.json
 # Logs
 app.log
 
+# Uploaded PDFs and built index (rebuilt on each device)
+data/docs/*.pdf
+data/index/
+
 # Node
 node_modules/
+
+# RAG data directories (large binaries and built index artifacts)
+data/ncert/
+data/index/
+
+# GGUF and LiteRT model files
+*.gguf
+*.litertlm
+*.litertlm.xnnpack_cache*
+
+# Test cache
+.pytest_cache/

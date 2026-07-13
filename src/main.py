@@ -12,6 +12,15 @@ CONNECTED_CLIENTS = set()
 ui_wake_event = asyncio.Event()
 ui_stop_event = asyncio.Event()
 
+# Shared index-status holder so ws_handler can respond to get_index_status
+# requests. Populated by main_loop after build_retrieval; read-only in ws_handler.
+_index_status_ref: dict = {}
+
+# Shared mutable app state — allows ws_handler to hot-swap the retrieval
+# reference after a successful rebuild_index, closing the build-once gap
+# (Req 2.11). Keys: "retrieval" (current RetrievalService), "cfg" (AppConfig).
+_app_state: dict = {}
+
 async def broadcast(message_dict):
     if CONNECTED_CLIENTS:
         msg = json.dumps(message_dict)
@@ -50,6 +59,240 @@ async def ws_handler(websocket):
                 ui_wake_event.set()
             elif data.get("type") == "stop_listening":
                 ui_stop_event.set()
+            elif data.get("type") == "get_index_status":
+                # Respond with the current index status (additive, does not change
+                # any existing message type — Req 3.3, 3.8, 3.9 preserved).
+                # _index_status_ref is populated by main_loop after build_retrieval.
+                status = _index_status_ref.get("status", {"built": False, "chunk_count": 0})
+                await websocket.send(json.dumps({"type": "index_status", **status}))
+            elif data.get("type") == "upload_pdf":
+                import base64
+                filename = data.get("filename", "document.pdf")
+                content_b64 = data.get("content_b64", "")
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # Flat upload — all PDFs go into data/docs/ regardless of type
+                dest_dir = os.path.join(project_root, "data", "docs")
+                os.makedirs(dest_dir, exist_ok=True)
+                safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ").strip()
+                if not safe_name.endswith(".pdf"):
+                    safe_name += ".pdf"
+                dest_path = os.path.join(dest_dir, safe_name)
+                try:
+                    pdf_bytes = base64.b64decode(content_b64)
+                    with open(dest_path, "wb") as f:
+                        f.write(pdf_bytes)
+                    await websocket.send(json.dumps({
+                        "type": "upload_result", "success": True,
+                        "path": dest_path,
+                        "message": f"Saved '{safe_name}' to knowledge base"
+                    }))
+                except Exception as exc:
+                    await websocket.send(json.dumps({"type": "upload_result", "success": False, "message": str(exc)}))
+            elif data.get("type") == "rebuild_index":
+                import sys as _sys
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                src_dir = os.path.join(project_root, "data", "docs")
+                out_dir = os.path.join(project_root, "data", "index")
+                script = os.path.join(project_root, "scripts", "build_index.py")
+                await websocket.send(json.dumps({"type": "index_progress", "message": "Starting index build..."}))
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        _sys.executable, script,
+                        "--src", src_dir, "--out", out_dir, "--embed", "minilm",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                        cwd=project_root,
+                    )
+                    captured_output_lines: list[str] = []
+                    async for line in proc.stdout:
+                        msg = line.decode("utf-8", errors="replace").strip()
+                        if msg:
+                            captured_output_lines.append(msg)
+                            await websocket.send(json.dumps({"type": "index_progress", "message": msg}))
+                    await proc.wait()
+                    success = proc.returncode == 0
+                    if success:
+                        done_message = "Index built successfully!"
+                    else:
+                        # Check captured output for known missing optional dependencies
+                        # and surface an actionable install message to the user.
+                        combined_output = "\n".join(captured_output_lines).lower()
+                        raw_combined = "\n".join(captured_output_lines)
+                        missing_deps: list[str] = []
+                        # sentence-transformers
+                        if (
+                            "sentence-transformers" in raw_combined
+                            or "sentence_transformers" in raw_combined
+                            or "no module named 'sentence_transformers'" in raw_combined.lower()
+                            or (
+                                ("modulenotfounderror" in combined_output or "importerror" in combined_output)
+                                and "sentence" in combined_output
+                            )
+                        ):
+                            missing_deps.append("sentence-transformers")
+                        # faiss-cpu
+                        if (
+                            "faiss" in combined_output
+                            and "no module named 'faiss'" in combined_output
+                        ) or ("faiss" in combined_output and (
+                            "modulenotfounderror" in combined_output or "importerror" in combined_output
+                        )):
+                            missing_deps.append("faiss-cpu")
+                        # pypdf
+                        if (
+                            "pypdf" in combined_output
+                            or "no module named 'pypdf'" in combined_output
+                            or "no module named 'pypdf2'" in combined_output
+                        ):
+                            missing_deps.append("pypdf")
+                        if len(missing_deps) == 1:
+                            dep = missing_deps[0]
+                            failure_message = (
+                                f"Missing dependency: {dep}. "
+                                f"Install with: pip install {dep}"
+                            )
+                        elif len(missing_deps) > 1:
+                            failure_message = (
+                                "Index build failed. Check app.log. "
+                                "You may need: pip install "
+                                + " ".join(missing_deps)
+                            )
+                        else:
+                            failure_message = (
+                                "Index build failed. Check app.log. "
+                                "You may need: pip install sentence-transformers faiss-cpu pypdf"
+                            )
+                        done_message = failure_message
+                    await websocket.send(json.dumps({
+                        "type": "index_done", "success": success,
+                        "message": done_message
+                    }))
+                    await broadcast({"type": "refresh_ncert_graph"})
+                    # Broadcast updated indexed_docs so TextbooksView refreshes immediately
+                    if success:
+                        try:
+                            import json as _json2, hashlib as _hl2
+                            _chunks_p = os.path.join(project_root, "data", "index", "chunks.jsonl")
+                            if os.path.exists(_chunks_p):
+                                _doc_stats: dict = {}
+                                with open(_chunks_p, "r", encoding="utf-8") as _fds:
+                                    for _ln in _fds:
+                                        _ln = _ln.strip()
+                                        if not _ln:
+                                            continue
+                                        _ch = _json2.loads(_ln)
+                                        _src = _ch.get("source") or _ch.get("chapter") or _ch.get("subject") or "Unknown"
+                                        _pg = _ch.get("page", 1)
+                                        if _src not in _doc_stats:
+                                            _doc_stats[_src] = {"source": _src, "chunk_count": 0, "max_page": 0}
+                                        _doc_stats[_src]["chunk_count"] += 1
+                                        if _pg > _doc_stats[_src]["max_page"]:
+                                            _doc_stats[_src]["max_page"] = _pg
+                                _docs_out = [
+                                    {"source": d["source"], "page_count": d["max_page"], "chunk_count": d["chunk_count"]}
+                                    for d in _doc_stats.values()
+                                ]
+                                await broadcast({"type": "indexed_docs", "docs": _docs_out})
+                        except Exception:
+                            pass
+                    # Hot-reload: after a successful build, swap in a fresh
+                    # retrieval service so the running process uses the new
+                    # index without requiring a restart (Req 2.11).
+                    if success and "cfg" in _app_state:
+                        try:
+                            new_retrieval = build_retrieval(_app_state["cfg"])
+                            _app_state["retrieval"] = new_retrieval
+                            new_status = _get_index_status(new_retrieval)
+                            _index_status_ref["status"] = new_status
+                            await broadcast({"type": "index_status", **new_status})
+                        except Exception as swap_exc:
+                            # Fallback arm: hot-swap failed — instruct user to restart.
+                            await broadcast({
+                                "type": "index_status",
+                                "built": False,
+                                "chunk_count": 0,
+                                "restart_required": True,
+                                "message": f"Index built but reload failed — please restart: {swap_exc}"
+                            })
+                except Exception as exc:
+                    await websocket.send(json.dumps({"type": "index_done", "success": False, "message": str(exc)}))
+            elif data.get("type") == "get_indexed_docs":
+                # Return a list of all indexed documents with per-doc stats.
+                # Reads chunks.jsonl and aggregates by source name.
+                # Response: {"type": "indexed_docs", "docs": [{"source", "page_count", "chunk_count"}]}
+                import json as _json, hashlib as _hl
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                chunks_path = os.path.join(project_root, "data", "index", "chunks.jsonl")
+                if not os.path.exists(chunks_path):
+                    await websocket.send(_json.dumps({"type": "indexed_docs", "docs": []}))
+                else:
+                    doc_stats: dict[str, dict] = {}
+                    try:
+                        with open(chunks_path, "r", encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                chunk = _json.loads(line)
+                                source = chunk.get("source") or chunk.get("chapter") or chunk.get("subject") or "Unknown"
+                                page = chunk.get("page", 1)
+                                if source not in doc_stats:
+                                    doc_stats[source] = {"source": source, "chunk_count": 0, "max_page": 0}
+                                doc_stats[source]["chunk_count"] += 1
+                                if page > doc_stats[source]["max_page"]:
+                                    doc_stats[source]["max_page"] = page
+                        docs_list = [
+                            {"source": d["source"], "page_count": d["max_page"], "chunk_count": d["chunk_count"]}
+                            for d in doc_stats.values()
+                        ]
+                        await websocket.send(_json.dumps({"type": "indexed_docs", "docs": docs_list}))
+                    except Exception as exc:
+                        await websocket.send(_json.dumps({"type": "indexed_docs", "docs": [], "error": str(exc)}))
+            elif data.get("type") == "get_ncert_graph":
+                import json as _json, hashlib as _hl
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                chunks_path = os.path.join(project_root, "data", "index", "chunks.jsonl")
+                if not os.path.exists(chunks_path):
+                    await websocket.send(_json.dumps({"type": "ncert_graph_data", "nodes": [], "edges": []}))
+                else:
+                    seen_docs = {}
+                    try:
+                        with open(chunks_path, "r", encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                chunk = _json.loads(line)
+                                # Support both new schema (source) and legacy (subject/chapter)
+                                source = chunk.get("source") or chunk.get("chapter") or chunk.get("subject") or "Unknown"
+                                doc_hash = _hl.md5(source.encode()).hexdigest()[:8]
+                                doc_id = f"doc_{doc_hash}"
+                                if doc_id not in seen_docs:
+                                    page_count = chunk.get("page", 1)
+                                    seen_docs[doc_id] = {
+                                        "id": doc_id,
+                                        "label": source[:30],
+                                        "desc": source,
+                                        "source": source,
+                                        "pages": page_count,
+                                        "nodeType": "subject",  # reuse subject colour slot
+                                    }
+                                else:
+                                    # Track max page as proxy for document size
+                                    pg = chunk.get("page", 1)
+                                    if pg > seen_docs[doc_id]["pages"]:
+                                        seen_docs[doc_id]["pages"] = pg
+
+                        # Enrich desc with page count
+                        for doc in seen_docs.values():
+                            doc["desc"] = f"{doc['source']} ({doc['pages']} pages)"
+
+                        all_nodes = [{"id": "jarvis", "label": "JARVIS", "desc": f"Knowledge base: {len(seen_docs)} document(s) indexed."}]
+                        all_nodes += list(seen_docs.values())
+                        all_edges = [{"source": "jarvis", "target": d["id"]} for d in seen_docs.values()]
+                        await websocket.send(_json.dumps({"type": "ncert_graph_data", "nodes": all_nodes, "edges": all_edges}))
+                    except Exception as exc:
+                        await websocket.send(_json.dumps({"type": "ncert_graph_data", "nodes": [], "edges": [], "error": str(exc)}))
     except Exception as e:
         pass
     finally:
@@ -89,8 +332,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from audio.recorder import AudioRecorder
 from audio.processor import AudioProcessor
 from audio.wakeword import WakeWordDetector
-from inference.engine import GemmaEngine
-from synthesis.tts_stream import TTSStreamer
+from config import load_config
+from factories import build_engine, build_stt, build_tts, build_retrieval
+from inference.base import BaseEngine
+from stt.base import BaseSTT
+from synthesis.base import BaseTTS
+from retrieval.service import NullRetrievalService
 
 # Restore stderr after libraries are fully imported
 sys.stderr.close()
@@ -108,6 +355,19 @@ _SHUTDOWN_KW = {"shutdown", "shut down", "power off", "turn off", "exit", "quit"
 def _is_shutdown(text: str) -> bool:
     low = text.lower()
     return any(kw in low for kw in _SHUTDOWN_KW)
+
+
+def _get_index_status(retrieval) -> dict:
+    """Return index status dict: {built: bool, chunk_count: int}.
+
+    Works for both NullRetrievalService (chunk_count=0) and FAISSRetrievalService
+    (chunk_count from the underlying FAISS index ntotal).
+    """
+    if isinstance(retrieval, NullRetrievalService):
+        return {"built": False, "chunk_count": 0}
+    index = getattr(retrieval, "_index", None)
+    ntotal = getattr(index, "ntotal", 0) if index is not None else 0
+    return {"built": ntotal > 0, "chunk_count": ntotal}
 
 # State Machine States
 IDLE      = "IDLE"      
@@ -153,31 +413,55 @@ def show_status(state: str, details: str = ""):
 async def main_loop() -> None:
     # Start WebSocket Server
     try:
-        await websockets.serve(ws_handler, "localhost", 8765)
+        # max_size raised to 200 MB so large textbook PDF uploads (sent as a
+        # single base64 message from the Textbooks tab) don't trip the default
+        # 1 MB limit, which would force-close the connection mid-upload
+        # (manifesting as "backend offline -> PDF disappears -> backend online").
+        await websockets.serve(
+            ws_handler, "localhost", 8765, max_size=200 * 1024 * 1024
+        )
     except Exception as e:
         print(f"[WS] Failed to start WebSocket server: {e}")
 
     draw_header()
     print("\n[SYSTEM] Loading offline AI models into memory. Please wait...", flush=True)
 
-    import whisper
-    stt_model = whisper.load_model("base.en")
-    
+    cfg = load_config("config.yaml")
+    stt = build_stt(cfg)
+    tts = build_tts(cfg)
+    engine = build_engine(cfg)
+    retrieval = build_retrieval(cfg)
+
+    # Store in shared app state so ws_handler can hot-swap retrieval after a
+    # successful rebuild_index (closes the build-once gap — Req 2.11).
+    _app_state["retrieval"] = retrieval
+    _app_state["cfg"] = cfg
+
+    # Detect index readiness immediately after building retrieval
+    _index_status = _get_index_status(retrieval)
+    _index_status_ref["status"] = _index_status  # expose for ws_handler get_index_status
+    if not _index_status["built"]:
+        print("[KNOWLEDGE BASE] NOT built — answers will be ungrounded. Upload a PDF and rebuild.", flush=True)
+    else:
+        print(f"[KNOWLEDGE BASE] Ready — {_index_status['chunk_count']} chunks indexed.", flush=True)
+
     recorder  = AudioRecorder(samplerate=16000, blocksize=1280)  
     processor = AudioProcessor()
     wakeword  = WakeWordDetector(
         model_paths=["assets/wakeword_models/hey_jarvis_v0.1.onnx"]
     )
-    tts = TTSStreamer()
-
-    model_path = "assets/gemma-4-E4B-it.litertlm"
-    if not os.path.exists(model_path):
-        print(f"\n[ERROR] Model not found at '{model_path}'. Please check README.")
-        return
-
-    engine = GemmaEngine(model_path=model_path)
     recorder.start()
+
+    print("\n[SYSTEM] Warming up inference engine...", flush=True)
+    engine.warmup()
+    if getattr(engine, "warmup_done", False):
+        print("[SYSTEM] Warmup complete.", flush=True)
+    else:
+        print("[SYSTEM] Warmup failed or was skipped — first turn may be slower.", flush=True)
     
+    # Broadcast index_status over WebSocket now that the server is ready
+    await broadcast({"type": "index_status", **_index_status})
+
     draw_header()
     print("\n" * 2) 
     show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
@@ -271,7 +555,7 @@ async def main_loop() -> None:
                     else:
                         show_status(SPEAKING, "Processing transcription & thoughts...")
                         response_task = asyncio.create_task(
-                            _handle_response(audio_data, engine, tts, stt_model, shutdown_event)
+                            _handle_response(audio_data, engine, tts, stt, retrieval, shutdown_event)
                         )
 
                         def _on_done(fut: asyncio.Task) -> None:
@@ -325,25 +609,55 @@ async def main_loop() -> None:
 
 async def _handle_response(
     audio_data: bytes,
-    engine: GemmaEngine,
-    tts: TTSStreamer,
-    stt_model,
+    engine: BaseEngine,
+    tts: BaseTTS,
+    stt: BaseSTT,
+    retrieval,
     shutdown_event: asyncio.Event,
 ) -> str:
     t_stt_start = time.perf_counter()
     audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-    # Dynamically inject knowledge graph entities into Whisper's initial prompt to guide phonetics
-    import os
+    # Dynamically inject knowledge graph entities + NCERT domain vocabulary into
+    # Whisper's initial_prompt to guide phonetics (Req 3.4 contract preserved —
+    # only the contents are enriched, the hint mechanism is unchanged).
+    import os, json as _json
     wiki_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge", "vault", "wiki", "entities")
     entity_names = ["Bangalore", "Whitefield", "Reachy Mini", "Dr. Anjali"]
     if os.path.exists(wiki_dir):
         from_files = [fn.replace(".md", "").replace("-", " ").title() for fn in os.listdir(wiki_dir) if fn.endswith(".md")]
         entity_names.extend(from_files)
+
+    # Enrich with NCERT subject/chapter vocabulary for domain biasing (Task 9.2 / Req 2.13).
+    # Gracefully skipped when chunks.jsonl does not exist — no error raised.
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    chunks_path = os.path.join(project_root, "data", "index", "chunks.jsonl")
+    if os.path.exists(chunks_path):
+        try:
+            domain_terms: set[str] = set()
+            with open(chunks_path, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if not _line:
+                        continue
+                    try:
+                        _chunk = _json.loads(_line)
+                        subj = _chunk.get("subject", "")
+                        chap = _chunk.get("chapter", "")
+                        if subj:
+                            domain_terms.add(subj.strip())
+                        if chap:
+                            # Take first 3 words of chapter title for brevity
+                            chap_words = chap.strip().split()[:3]
+                            domain_terms.add(" ".join(chap_words))
+                    except Exception:
+                        continue
+            entity_names.extend(list(domain_terms)[:20])  # cap at 20 domain terms
+        except Exception:
+            pass  # graceful — no domain terms if file unreadable
+
+    stt_prompt = ", ".join(list(set(entity_names))[:30])  # cap total at 30 terms
     
-    stt_prompt = ", ".join(set(entity_names))
-    
-    result = await asyncio.to_thread(stt_model.transcribe, audio_np, fp16=False, initial_prompt=stt_prompt)
-    text = result.get("text", "").strip()
+    text = await asyncio.to_thread(stt.transcribe, audio_np, initial_prompt=stt_prompt)
     stt_ms = int((time.perf_counter() - t_stt_start) * 1000)
 
     from knowledge.graph import autocorrect_stt
@@ -360,53 +674,90 @@ async def _handle_response(
         shutdown_event.set()
         return "Shutting down."
 
-    # Inject wiki context if applicable
-    from knowledge.graph import fast_wiki_router
-    from knowledge.search import ActiveWebUpdater
-    
-    wiki_context = fast_wiki_router(text)
-    prompt_text = text
+    from inference.prompt_builder import build_prompt, build_page_prompt
+    from retrieval.query_router import (
+        parse_page_number,
+        is_book_list_query,
+        extract_book_name_query,
+        book_query_has_match,
+        format_book_list,
+        answer_book_query,
+    )
     loop = asyncio.get_running_loop()
-    
-    # Check explicitly for update commands first!
-    update_triggers = ["update yourself", "update your self", "learn about", "search the internet and update", "update it"]
-    if any(trigger in text.lower() for trigger in update_triggers):
-        show_status(SPEAKING, "Searching the internet and updating my vault...")
-        updater = ActiveWebUpdater()
-        web_context = await asyncio.to_thread(updater.search_and_stage, text)
-        
-        from knowledge.vault_compiler import WikiCustodian, LocalCompilerClient
-        compiler_client = LocalCompilerClient(engine)
-        
-        def run_compiler():
-            WikiCustodian().process_incoming_web_logs(compiler_client)
-            
-        asyncio.create_task(asyncio.to_thread(run_compiler))
-        
-        # Bypass the LLM for immediate 0ms TTFT response
-        def hardcoded_stream():
-            words = "I am researching that topic on the internet right now, and compiling the facts into my permanent knowledge vault!".split(" ")
-            for i, w in enumerate(words):
-                chunk = w + (" " if i < len(words)-1 else "")
-                try:
-                    asyncio.run_coroutine_threadsafe(broadcast({"type": "text", "text": chunk}), loop)
-                except:
-                    pass
-                yield chunk
-        
-        print("\nJarvis: ", end="", flush=True)
-        return await asyncio.to_thread(tts.stream_text, hardcoded_stream())
-    elif wiki_context:
-        prompt_text = f"Context from the knowledge vault:\n{wiki_context}\n\nUser: {text}"
-    elif any(trigger in text.lower() for trigger in ["search", "look up", "what is the current", "who won", "internet"]):
-        show_status(SPEAKING, "Searching the web...")
-        updater = ActiveWebUpdater()
-        web_context = await asyncio.to_thread(updater.search_and_stage, text)
-        prompt_text = f"{web_context}\n\nUser: {text}"
+
+    # Read the current retrieval service from shared app state so any
+    # hot-swap performed by rebuild_index takes effect immediately (Req 2.11).
+    # Fall back to the parameter if _app_state is not yet populated.
+    active_retrieval = _app_state.get("retrieval", retrieval)
+
+    # ── Special-query routing: knowledge-base awareness + exact page lookup ──
+    # These are answered deterministically from the index metadata rather than
+    # via semantic search, so the assistant reliably knows which books it has.
+    try:
+        _sources = active_retrieval.list_sources()
+    except Exception:
+        _sources = []
+
+    async def _speak_answer(answer: str) -> str:
+        print(f"\nJarvis: {answer}")
+        try:
+            await broadcast({"type": "text", "text": answer})
+        except Exception:
+            pass
+        await asyncio.to_thread(tts.speak, answer)
+        return answer
+
+    # (a) "What books / documents do you have?"
+    if is_book_list_query(text):
+        return await _speak_answer(format_book_list(_sources))
+
+    # (b) "Do you have the <X> book?" — only short-circuit when it's a genuine
+    # availability question that positively matches an indexed document.
+    # Content questions fall through to semantic retrieval below, so the
+    # assistant automatically pulls from whichever textbook is relevant.
+    _book_q = extract_book_name_query(text)
+    if _book_q is not None and book_query_has_match(_book_q, _sources):
+        return await _speak_answer(answer_book_query(_book_q, _sources))
+
+    # (c) "Read page N" / "what's on page N" — exact page lookup
+    _page_no = parse_page_number(text)
+    _page_chunks = []
+    if _page_no is not None and _sources:
+        try:
+            _page_chunks = active_retrieval.get_page(_page_no)
+        except Exception:
+            _page_chunks = []
+        if not _page_chunks:
+            return await _speak_answer(
+                f"I couldn't find page {_page_no} in the uploaded documents."
+            )
+
+    # Check answer cache first (instant replay for repeated questions)
+    cached = active_retrieval.cache_get(text)
+    if cached:
+        show_status(SPEAKING, "Answering from cache...")
+        print(f"\nJarvis: {cached.answer_text}")
+        await asyncio.to_thread(tts.speak, cached.answer_text)
+        return cached.answer_text
+
+    if _page_chunks:
+        # Exact-page lookup: build a page-summary prompt from the page's chunks.
+        prompt_text = build_page_prompt(text, _page_no, _page_chunks)
+    else:
+        # Retrieve relevant context via semantic search.
+        chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+        prompt_text = build_prompt(text, chunks)
 
     t_llm_start = time.perf_counter()
     show_status(SPEAKING, "Generating reply...")
-    stream = engine.get_stream(None, prompt_text)
+    # Reset conversation each turn so prefill stays small and TTFT does not grow
+    # over a session. Each query is self-contained (its own retrieved/page
+    # context is injected), so multi-turn memory is not needed here.
+    try:
+        engine.reset()
+    except Exception:
+        pass
+    stream = engine.get_stream(prompt_text)
     
     def latency_wrapper():
         first = True
@@ -423,6 +774,7 @@ async def _handle_response(
 
     print("Jarvis: ", end="", flush=True)
     full_text = await asyncio.to_thread(tts.stream_text, latency_wrapper())
+    active_retrieval.cache_put(text, full_text)  # Cache the answer for future instant replay
     total_generation_ms = int((time.perf_counter() - t_llm_start) * 1000)
     
     print(f"\n\033[2m[Latency Profile -> STT: {stt_ms}ms | Total Gen+Speech: {total_generation_ms}ms]\033[0m")
