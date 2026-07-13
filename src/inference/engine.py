@@ -1,21 +1,12 @@
 import logging
 from typing import Any, Iterator
 
-import litert_lm
-
-from .base import BaseEngine
+from .base import BaseEngine, SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = (
-    "You are Jarvis, a fast, helpful voice assistant running on an edge device. "
-    "Always reply in 1-3 short sentences. Never use bullet points, markdown, "
-    "asterisks, or lists. Speak naturally as if in conversation. "
-    "When the user's message includes a 'Context:' block, answer only from that context "
-    "and cite the document name and page number. "
-    "If the context does not contain the answer, say you do not have that information. "
-    "Do not invent facts."
-)
+# Backward-compat alias — llama_cpp_engine and ollama_engine import this
+_SYSTEM_PROMPT = SYSTEM_PROMPT
 
 
 class LiteRTEngine(BaseEngine):
@@ -23,18 +14,23 @@ class LiteRTEngine(BaseEngine):
 
     Wraps litert_lm.Engine and manages a multi-turn conversation, applying the
     system prompt internally so callers stay backend-neutral.
+    litert_lm is imported lazily so this file loads without error on Jetson
+    (where litert_lm is not installed and the ollama backend is used instead).
     """
 
     def __init__(self, model_path: str = "assets/gemma-4-E4B-it.litertlm"):
+        try:
+            import litert_lm as _litert_lm  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "litert-lm is required for LiteRTEngine but is not installed.\n"
+                "On the Jetson Orin, use backend: ollama in config.yaml instead."
+            ) from exc
         self.model_path = model_path
-        self._engine = litert_lm.Engine(model_path, backend=litert_lm.Backend.CPU)
+        self._engine = _litert_lm.Engine(model_path, backend=_litert_lm.Backend.CPU)
         self.conversation = self._engine.create_conversation()
         self._warmup_done: bool = False
         self._apply_system_prompt()
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _apply_system_prompt(self) -> None:
         """Inject the system prompt as the first turn of the conversation."""
@@ -45,7 +41,6 @@ class LiteRTEngine(BaseEngine):
             }
             self.conversation.send_message(system_msg)
         except Exception:
-            # Some LiteRT-LM builds don't support the 'system' role — silently skip.
             pass
 
     @staticmethod
@@ -60,16 +55,7 @@ class LiteRTEngine(BaseEngine):
             return " ".join(texts).strip()
         return str(contents).strip()
 
-    # ------------------------------------------------------------------
-    # BaseEngine contract
-    # ------------------------------------------------------------------
-
     def get_stream(self, prompt: str) -> Iterator[str]:
-        """Send a user turn and stream the assistant's text response.
-
-        Yields at least one chunk (possibly empty) and does not raise
-        mid-stream for normal completion.
-        """
         message = {
             "role": "user",
             "content": [{"type": "text", "text": prompt}],
@@ -93,15 +79,6 @@ class LiteRTEngine(BaseEngine):
         self._apply_system_prompt()
 
     def warmup(self) -> None:
-        """Decode one short token to pay the one-time init cost before the first user turn.
-
-        Sets ``_warmup_done`` to ``True`` on success and logs a warning on failure
-        so callers can detect whether the one-time init cost was paid.  The
-        ``reset()`` after the decode clears the "Hi" exchange from conversation
-        history while keeping the engine's internal graph/weights warm (LiteRT
-        JIT-compiles the graph on first decode; subsequent decodes reuse it even
-        after a conversation reset).
-        """
         try:
             for _ in self.get_stream("Hi"):
                 break
@@ -113,12 +90,8 @@ class LiteRTEngine(BaseEngine):
 
     @property
     def warmup_done(self) -> bool:
-        """True if warmup() completed without raising an exception."""
         return self._warmup_done
 
 
-# ---------------------------------------------------------------------------
-# Backward-compatibility alias — keeps existing callers working during
-# the transition.  Remove once main.py is updated to use LiteRTEngine.
-# ---------------------------------------------------------------------------
+# Backward-compatibility alias
 GemmaEngine = LiteRTEngine

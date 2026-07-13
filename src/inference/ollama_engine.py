@@ -20,7 +20,7 @@ import logging
 from typing import Iterator
 
 from .base import BaseEngine
-from .engine import _SYSTEM_PROMPT
+from .base import SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
