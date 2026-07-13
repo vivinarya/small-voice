@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-_VALID_ENGINE  = {"litert", "llama_cpp"}
+_VALID_ENGINE  = {"litert", "llama_cpp", "ollama"}
 _VALID_STT     = {"whisper", "faster_whisper"}
 _VALID_TTS     = {"piper", "kokoro"}
 _VALID_EMBED   = {"minilm", "bge_small"}

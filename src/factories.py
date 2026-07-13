@@ -29,6 +29,10 @@ def build_engine(cfg: AppConfig) -> BaseEngine:
             model_path=cfg.model_path,
             n_gpu_layers=cfg.n_gpu_layers,
         )
+    elif cfg.engine_backend == "ollama":
+        from inference.ollama_engine import OllamaEngine  # noqa: PLC0415
+        logger.info("Building OllamaEngine (model='%s')", cfg.model_path)
+        return OllamaEngine(model_name=cfg.model_path)
     else:
         # _validate() in config.py should have caught this already
         raise ValueError(f"Unknown engine backend: '{cfg.engine_backend}'")

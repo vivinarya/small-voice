@@ -14,22 +14,22 @@
 #   - stt.compute_type: int8  ->  float16  (uses Tensor cores on Orin Ampere GPU)
 
 engine:
-  backend: llama_cpp                                       # litert not supported on aarch64 CUDA
-  model_path: models/qwen2.5-1.5b-instruct-q4_k_m.gguf  # download with: scripts/download_models.sh
-  n_gpu_layers: -1                                         # -1 = offload all layers to GPU
+  backend: ollama                                          # Ollama has its own bundled CUDA — no system CUDA toolkit needed
+  model_path: qwen2.5:1.5b                               # any model pulled via: ollama pull qwen2.5:1.5b
+  n_gpu_layers: -1                                         # ignored by ollama backend (it handles GPU automatically)
 
 stt:
   backend: faster_whisper
   model: small.en
-  compute_type: float16                                    # fp16 Tensor core inference on Orin GPU
-                                                           # (use int8 if you see accuracy issues)
+  compute_type: int8                                       # int8 CPU — avoids PyTorch CUDA dependency entirely
+                                                           # (change to float16 only after CUDA toolkit is installed)
 
 tts:
   backend: piper
-  voice_path: assets/piper_voices/en_US-lessac-medium.onnx  # same voice as Windows
+  voice_path: assets/piper_voices/en_US-lessac-medium.onnx
 
 retrieval:
-  embed_backend: minilm                                    # same MiniLM index, no rebuild needed
+  embed_backend: minilm
   index_dir: data/index
   k: 3
   min_score: 0.25
