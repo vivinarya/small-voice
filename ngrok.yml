@@ -1,0 +1,17 @@
+# ngrok.yml configuration template for Jetson Orin Nano
+# Place this in ~/.config/ngrok/ngrok.yml on the Jetson Orin
+# Run using: ngrok start --all
+
+authtoken: YOUR_NGROK_AUTHTOKEN_HERE
+
+tunnels:
+  frontend:
+    proto: http
+    addr: 8090
+    schemes:
+      - https
+  websocket:
+    proto: http
+    addr: 8080
+    schemes:
+      - https

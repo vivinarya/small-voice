@@ -17,8 +17,11 @@ const DARK = "#1e1d1b";
 
 // ─── Shared WebSocket hook ─────────────────────────────────────────────────────
 function getWsUrl(): string {
-  // When accessed via ngrok or any remote host, connect WebSocket to port 8080.
-  // When on localhost, use the standard port 8765.
+  // Check if a build-time Vite environment variable was set (e.g. VITE_WS_URL)
+  // or a query parameter is specified.
+  const fromEnv = (import.meta as any).env?.VITE_WS_URL;
+  if (fromEnv) return fromEnv;
+
   const { protocol, hostname } = window.location;
   const params = new URLSearchParams(window.location.search);
   const fromQuery = params.get("ws");

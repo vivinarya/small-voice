@@ -15,7 +15,7 @@
 
 engine:
   backend: ollama                                          # Ollama has its own bundled CUDA — no system CUDA toolkit needed
-  model_path: qwen2.5:1.5b                               # any model pulled via: ollama pull qwen2.5:1.5b
+  model_path: qwen2.5:3b                               # any model pulled via: ollama pull qwen2.5:3b
   n_gpu_layers: -1                                         # ignored by ollama backend (it handles GPU automatically)
 
 stt:
