@@ -70,18 +70,27 @@ async def ws_handler(websocket):
                 else:
                     try:
                         raw_bytes = _b64.b64decode(audio_b64)
-                        # Use soundfile to decode WebM/WAV/OGG → float32 numpy array
-                        import soundfile as _sf
-                        audio_np, sr = _sf.read(_io.BytesIO(raw_bytes), dtype="float32", always_2d=False)
-                        # Resample to 16 kHz if needed
-                        if sr != 16000:
-                            import scipy.signal as _sig
-                            target_len = int(len(audio_np) * 16000 / sr)
-                            audio_np = _sig.resample(audio_np, target_len).astype(_np.float32)
-                        # Convert stereo to mono
-                        if audio_np.ndim > 1:
-                            audio_np = audio_np.mean(axis=1)
-                        # Normalise to [-1, 1]
+                        # Convert browser audio (WebM/Opus/OGG) to WAV via ffmpeg,
+                        # then decode with soundfile. soundfile cannot read WebM directly.
+                        import subprocess as _sp, tempfile as _tf, os as _os
+                        with _tf.NamedTemporaryFile(suffix=".webm", delete=False) as _f:
+                            _f.write(raw_bytes)
+                            _tmp_in = _f.name
+                        _tmp_out = _tmp_in.replace(".webm", ".wav")
+                        try:
+                            _sp.run(
+                                ["ffmpeg", "-y", "-i", _tmp_in,
+                                 "-ar", "16000", "-ac", "1", "-f", "wav", _tmp_out],
+                                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, check=True
+                            )
+                            import soundfile as _sf
+                            audio_np, sr = _sf.read(_tmp_out, dtype="float32", always_2d=False)
+                        finally:
+                            _os.unlink(_tmp_in)
+                            if _os.path.exists(_tmp_out):
+                                _os.unlink(_tmp_out)
+                        import numpy as _np
+                        # Normalise
                         peak = _np.abs(audio_np).max()
                         if peak > 0:
                             audio_np = audio_np / peak
