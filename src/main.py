@@ -465,16 +465,16 @@ def show_status(state: str, details: str = ""):
 async def main_loop() -> None:
     # Start WebSocket Server
     try:
-        # max_size raised to 200 MB so large textbook PDF uploads (sent as a
-        # single base64 message from the Textbooks tab) don't trip the default
-        # 1 MB limit, which would force-close the connection mid-upload
-        # (manifesting as "backend offline -> PDF disappears -> backend online").
+        # Port 8765: local WebSocket for same-machine access
         await websockets.serve(
             ws_handler, "localhost", 8765, max_size=200 * 1024 * 1024
         )
-        # Also serve frontend static files + WebSocket on port 8080 so a single
-        # ngrok tunnel covers everything. Requests to /ws are upgraded to WebSocket;
-        # all other requests serve the built frontend from frontend/dist/.
+        # Port 8080: WebSocket bound on all interfaces for ngrok tunnel access.
+        # ngrok http 8080 automatically forwards WebSocket upgrade requests.
+        await websockets.serve(
+            ws_handler, "0.0.0.0", 8080, max_size=200 * 1024 * 1024
+        )
+        # Serve frontend static files on port 8090 (separate from WebSocket ports)
         _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         _dist_dir = os.path.join(_project_root, "frontend", "dist")
         if os.path.isdir(_dist_dir):
@@ -485,27 +485,19 @@ async def main_loop() -> None:
             class _SPAHandler(_hs.SimpleHTTPRequestHandler):
                 def __init__(self, *a, **kw):
                     super().__init__(*a, directory=_dist_dir, **kw)
-
                 def log_message(self, *a):
-                    pass  # suppress noisy access logs
-
+                    pass
                 def do_GET(self):
-                    # SPA fallback — return index.html for unknown paths
                     p = _pl.Path(_dist_dir + self.path.split("?")[0])
                     if not p.exists() or not p.is_file():
                         self.path = "/index.html"
                     super().do_GET()
 
-            _httpd = _hs.HTTPServer(("0.0.0.0", 8080), _SPAHandler)
+            _httpd = _hs.HTTPServer(("0.0.0.0", 8090), _SPAHandler)
             _t = _threading.Thread(target=_httpd.serve_forever, daemon=True)
             _t.start()
-            print("[HTTP] Frontend + static files on http://0.0.0.0:8080", flush=True)
-
-        # Also bind WebSocket on 8080 so a single ngrok tunnel handles both
-        await websockets.serve(
-            ws_handler, "0.0.0.0", 8080,
-            max_size=200 * 1024 * 1024,
-        )
+            print("[HTTP] Frontend on http://0.0.0.0:8090", flush=True)
+        print("[WS]   WebSocket on ws://0.0.0.0:8080  (ngrok: ngrok http 8080)", flush=True)
     except Exception as e:
         print(f"[WS] Failed to start WebSocket server: {e}")
 

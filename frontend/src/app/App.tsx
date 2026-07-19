@@ -17,17 +17,18 @@ const DARK = "#1e1d1b";
 
 // ─── Shared WebSocket hook ─────────────────────────────────────────────────────
 function getWsUrl(): string {
-  // When accessed via ngrok or any remote host, derive the WebSocket backend URL
-  // from the current page's origin so the frontend doesn't need to be rebuilt.
-  // Priority: ?ws= query param > sessionStorage > default localhost
+  // When accessed via ngrok or any remote host, connect WebSocket to port 8080.
+  // When on localhost, use the standard port 8765.
+  const { protocol, hostname } = window.location;
   const params = new URLSearchParams(window.location.search);
   const fromQuery = params.get("ws");
-  if (fromQuery) {
-    sessionStorage.setItem("jarvis_ws_url", fromQuery);
-    return fromQuery;
+  if (fromQuery) return fromQuery;
+
+  if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+    // Accessed remotely (e.g. via ngrok) — WebSocket is on port 8080 same host
+    const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+    return `${wsProtocol}//${hostname}:8080`;
   }
-  const stored = sessionStorage.getItem("jarvis_ws_url");
-  if (stored) return stored;
   return "ws://localhost:8765";
 }
 
