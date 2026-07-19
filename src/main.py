@@ -472,6 +472,28 @@ async def main_loop() -> None:
         await websockets.serve(
             ws_handler, "localhost", 8765, max_size=200 * 1024 * 1024
         )
+        # Also start a simple HTTP server for the frontend on port 8080
+        # so a single ngrok tunnel can serve both UI and WebSocket.
+        import threading as _threading, http.server as _hs, functools as _fc
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _dist_dir = os.path.join(_project_root, "frontend", "dist")
+        if os.path.isdir(_dist_dir):
+            class _SPA(_hs.SimpleHTTPRequestHandler):
+                def __init__(self, *a, **kw):
+                    super().__init__(*a, directory=_dist_dir, **kw)
+                def log_message(self, *a):
+                    pass  # suppress access logs
+                def do_GET(self):
+                    # SPA fallback: serve index.html for unknown paths
+                    import pathlib as _pl
+                    p = _pl.Path(_dist_dir + self.path.split("?")[0])
+                    if not p.exists() or not p.is_file():
+                        self.path = "/index.html"
+                    super().do_GET()
+            _httpd = _hs.HTTPServer(("0.0.0.0", 8080), _SPA)
+            _t = _threading.Thread(target=_httpd.serve_forever, daemon=True)
+            _t.start()
+            print("[HTTP] Frontend served on http://0.0.0.0:8080", flush=True)
     except Exception as e:
         print(f"[WS] Failed to start WebSocket server: {e}")
 

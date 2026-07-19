@@ -16,6 +16,21 @@ const MINT = "#3DD68C";
 const DARK = "#1e1d1b";
 
 // ─── Shared WebSocket hook ─────────────────────────────────────────────────────
+function getWsUrl(): string {
+  // When accessed via ngrok or any remote host, derive the WebSocket backend URL
+  // from the current page's origin so the frontend doesn't need to be rebuilt.
+  // Priority: ?ws= query param > sessionStorage > default localhost
+  const params = new URLSearchParams(window.location.search);
+  const fromQuery = params.get("ws");
+  if (fromQuery) {
+    sessionStorage.setItem("jarvis_ws_url", fromQuery);
+    return fromQuery;
+  }
+  const stored = sessionStorage.getItem("jarvis_ws_url");
+  if (stored) return stored;
+  return "ws://localhost:8765";
+}
+
 function useSharedWS(url: string) {
   const wsRef = useRef<WebSocket | null>(null);
   const [ws, setWs] = useState<WebSocket | null>(null);
@@ -476,7 +491,7 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [view, setView] = useState<AppView>("speak");
-  const ws = useSharedWS("ws://localhost:8765");
+  const ws = useSharedWS(getWsUrl());
 
   return (
     <div
