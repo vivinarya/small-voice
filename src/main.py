@@ -59,6 +59,49 @@ async def ws_handler(websocket):
                 ui_wake_event.set()
             elif data.get("type") == "stop_listening":
                 ui_stop_event.set()
+            elif data.get("type") == "browser_audio":
+                # Audio captured by the browser mic and sent as base64 WebM/WAV.
+                # Decode, convert to float32 PCM, run STT + full response pipeline.
+                import base64 as _b64, io as _io
+                import numpy as _np
+                audio_b64 = data.get("audio_b64", "")
+                if not audio_b64:
+                    await websocket.send(json.dumps({"type": "error", "message": "No audio data received."}))
+                else:
+                    try:
+                        raw_bytes = _b64.b64decode(audio_b64)
+                        # Use soundfile to decode WebM/WAV/OGG → float32 numpy array
+                        import soundfile as _sf
+                        audio_np, sr = _sf.read(_io.BytesIO(raw_bytes), dtype="float32", always_2d=False)
+                        # Resample to 16 kHz if needed
+                        if sr != 16000:
+                            import scipy.signal as _sig
+                            target_len = int(len(audio_np) * 16000 / sr)
+                            audio_np = _sig.resample(audio_np, target_len).astype(_np.float32)
+                        # Convert stereo to mono
+                        if audio_np.ndim > 1:
+                            audio_np = audio_np.mean(axis=1)
+                        # Normalise to [-1, 1]
+                        peak = _np.abs(audio_np).max()
+                        if peak > 0:
+                            audio_np = audio_np / peak
+                        await broadcast({"type": "state", "state": "processing"})
+                        active_engine   = _app_state.get("engine",   None)
+                        active_tts      = _app_state.get("tts",      None)
+                        active_stt      = _app_state.get("stt",      None)
+                        active_retrieval = _app_state.get("retrieval", None)
+                        if not all([active_engine, active_tts, active_stt, active_retrieval]):
+                            await websocket.send(json.dumps({"type": "error", "message": "Backend models not ready yet."}))
+                        else:
+                            shutdown_ev = asyncio.Event()
+                            asyncio.create_task(
+                                _handle_browser_response(
+                                    audio_np, active_engine, active_tts,
+                                    active_stt, active_retrieval, shutdown_ev
+                                )
+                            )
+                    except Exception as exc:
+                        await websocket.send(json.dumps({"type": "error", "message": f"Audio processing error: {exc}"}))
             elif data.get("type") == "get_index_status":
                 # Respond with the current index status (additive, does not change
                 # any existing message type — Req 3.3, 3.8, 3.9 preserved).
@@ -436,6 +479,9 @@ async def main_loop() -> None:
     # successful rebuild_index (closes the build-once gap — Req 2.11).
     _app_state["retrieval"] = retrieval
     _app_state["cfg"] = cfg
+    _app_state["engine"] = engine
+    _app_state["tts"] = tts
+    _app_state["stt"] = stt
 
     # Detect index readiness immediately after building retrieval
     _index_status = _get_index_status(retrieval)
@@ -605,6 +651,101 @@ async def main_loop() -> None:
         _interrupt()
         recorder.stop()
         print("\n\n[SYSTEM] Goodbye!")
+
+
+async def _handle_browser_response(
+    audio_np,
+    engine: "BaseEngine",
+    tts: "BaseTTS",
+    stt: "BaseSTT",
+    retrieval,
+    shutdown_event: asyncio.Event,
+) -> None:
+    """Handle audio captured by the browser mic (already float32 numpy array at 16 kHz)."""
+    import time as _time
+    t_stt = _time.perf_counter()
+    text = await asyncio.to_thread(stt.transcribe, audio_np)
+    stt_ms = int((_time.perf_counter() - t_stt) * 1000)
+    if not text:
+        await broadcast({"type": "state", "state": "idle", "details": "Couldn't hear anything — try again."})
+        return
+    print(f"\nUser (browser mic): {text}")
+    await broadcast({"type": "text", "text": ""})  # clear previous
+
+    from knowledge.graph import autocorrect_stt
+    text = autocorrect_stt(text)
+
+    from inference.prompt_builder import build_prompt, build_page_prompt
+    from retrieval.query_router import (
+        parse_page_number, is_book_list_query, extract_book_name_query,
+        format_book_list, answer_book_query,
+    )
+    loop = asyncio.get_running_loop()
+    active_retrieval = _app_state.get("retrieval", retrieval)
+
+    async def _speak(answer: str) -> None:
+        print(f"\nJarvis: {answer}")
+        await broadcast({"type": "text", "text": answer})
+        await asyncio.to_thread(tts.speak, answer)
+        await broadcast({"type": "state", "state": "idle"})
+
+    # Special query routing (book awareness / page lookup)
+    try:
+        sources = active_retrieval.list_sources()
+    except Exception:
+        sources = []
+
+    if is_book_list_query(text):
+        await _speak(format_book_list(sources))
+        return
+    bq = extract_book_name_query(text)
+    if bq is not None:
+        await _speak(answer_book_query(bq, sources))
+        return
+    page_no = parse_page_number(text)
+    page_chunks = []
+    if page_no is not None and sources:
+        try:
+            page_chunks = active_retrieval.get_page(page_no)
+        except Exception:
+            page_chunks = []
+        if not page_chunks:
+            await _speak(f"I couldn't find page {page_no} in the uploaded documents.")
+            return
+
+    if page_chunks:
+        prompt_text = build_page_prompt(text, page_no, page_chunks)
+    else:
+        chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+        prompt_text = build_prompt(text, chunks)
+
+    t_llm = _time.perf_counter()
+    await broadcast({"type": "state", "state": "speaking"})
+    try:
+        engine.reset()
+    except Exception:
+        pass
+    stream = engine.get_stream(prompt_text)
+
+    def _latency_wrapper():
+        first = True
+        for chunk in stream:
+            if first:
+                ttft_ms = int((_time.perf_counter() - t_llm) * 1000)
+                print(f"\n\033[2m[TTFT: {ttft_ms}ms]\033[0m")
+                first = False
+            try:
+                asyncio.run_coroutine_threadsafe(broadcast({"type": "text", "text": chunk}), loop)
+            except Exception:
+                pass
+            yield chunk
+
+    print("Jarvis: ", end="", flush=True)
+    full_text = await asyncio.to_thread(tts.stream_text, _latency_wrapper())
+    active_retrieval.cache_put(text, full_text)
+    total_ms = int((_time.perf_counter() - t_llm) * 1000)
+    print(f"\n\033[2m[Browser STT: {stt_ms}ms | Gen+Speech: {total_ms}ms]\033[0m")
+    await broadcast({"type": "state", "state": "idle"})
 
 
 async def _handle_response(

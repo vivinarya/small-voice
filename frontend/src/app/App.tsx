@@ -251,7 +251,10 @@ function Controls({
 function SpeakView({ ws }: { ws: WebSocket | null }) {
   const [state, setState] = useState<JarvisState>("idle");
   const [streamedWords, setStreamedWords] = useState<string[]>([]);
+  const [micError, setMicError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     if (messagesEndRef.current) {
@@ -274,10 +277,16 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
             setStreamedWords([]);
           } else if (s === "speaking") {
             setState("processing");
+          } else if (s === "processing") {
+            setState("processing");
           }
         } else if (data.type === "text") {
           setState("speaking");
           if (data.text) setStreamedWords((p) => [...p, data.text]);
+        } else if (data.type === "error") {
+          setState("idle");
+          setMicError(data.message || "Error");
+          setTimeout(() => setMicError(null), 4000);
         }
       } catch {}
     };
@@ -285,14 +294,54 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
     return () => ws.removeEventListener("message", handler);
   }, [ws]);
 
-  const handleStart = useCallback(() => {
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "start_listening" }));
+  const handleStart = useCallback(async () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    setMicError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+
+      // Pick a supported audio format — WebM works in Chrome/Firefox; fallback to default
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      const recorderOpts = mimeType ? { mimeType } : {};
+      const recorder = new MediaRecorder(stream, recorderOpts);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const reader = new FileReader();
+        reader.onload = () => {
+          const b64 = (reader.result as string).split(",")[1];
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "browser_audio", audio_b64: b64 }));
+          }
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      recorder.start();
+      setState("listening");
+    } catch (err) {
+      setMicError("Microphone access denied. Please allow mic access in your browser.");
+      setTimeout(() => setMicError(null), 5000);
     }
   }, [ws]);
 
   const handleStop = useCallback(() => {
-    if (ws?.readyState === WebSocket.OPEN) {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      setState("processing");
+    } else if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "stop_listening" }));
     }
   }, [ws]);
@@ -388,6 +437,18 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
         transition={{ duration: 0.7, delay: 0.25, ease: [0.16, 1, 0.3, 1] }}
         style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 22, paddingBottom: 52 }}
       >
+        {micError && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            style={{
+              background: "rgba(230,80,80,0.1)", border: "1px solid rgba(230,80,80,0.25)",
+              borderRadius: 10, padding: "8px 16px", maxWidth: 380, textAlign: "center",
+              fontFamily: FONT, fontSize: 12, color: "#c04040",
+            }}
+          >
+            {micError}
+          </motion.div>
+        )}
         <AnimatePresence>
           {state === "speaking" && (
             <motion.div
