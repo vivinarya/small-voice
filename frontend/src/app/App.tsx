@@ -281,6 +281,26 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
     }
   }, [streamedWords]);
 
+  // ─── Browser-side audio playback queue (for TTS WAV chunks from backend) ─────
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioQueueRef = useRef<AudioBuffer[]>([]);
+  const isPlayingRef = useRef(false);
+
+  const playNextChunk = useCallback(() => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingRef.current = false;
+      return;
+    }
+    isPlayingRef.current = true;
+    const ctx = audioCtxRef.current!;
+    const buf = audioQueueRef.current.shift()!;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.onended = playNextChunk;
+    src.start();
+  }, []);
+
   useEffect(() => {
     if (!ws) return;
     const handler = (e: MessageEvent) => {
@@ -302,6 +322,23 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
         } else if (data.type === "text") {
           setState("speaking");
           if (data.text) setStreamedWords((p) => [...p, data.text]);
+        } else if (data.type === "audio_out") {
+          // Decode base64 WAV from backend TTS and play via Web Audio API
+          try {
+            if (!audioCtxRef.current) {
+              audioCtxRef.current = new AudioContext();
+            }
+            const ctx = audioCtxRef.current;
+            const raw = atob(data.audio_b64);
+            const bytes = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+            ctx.decodeAudioData(bytes.buffer, (decoded) => {
+              audioQueueRef.current.push(decoded);
+              if (!isPlayingRef.current) playNextChunk();
+            });
+          } catch (audioErr) {
+            console.warn("audio_out decode error:", audioErr);
+          }
         } else if (data.type === "error") {
           setState("idle");
           setMicError(data.message || "Error");
@@ -311,7 +348,7 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
     };
     ws.addEventListener("message", handler);
     return () => ws.removeEventListener("message", handler);
-  }, [ws]);
+  }, [ws, playNextChunk]);
 
   const handleStart = useCallback(async () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;

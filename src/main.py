@@ -688,6 +688,18 @@ async def main_loop() -> None:
         print("\n\n[SYSTEM] Goodbye!")
 
 
+def _pcm_to_wav_bytes(pcm_np: "np.ndarray", samplerate: int = 22050) -> bytes:
+    """Convert a int16 PCM numpy array to an in-memory WAV file (bytes)."""
+    import io, wave as _wave
+    buf = io.BytesIO()
+    with _wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(samplerate)
+        wf.writeframes(pcm_np.tobytes())
+    return buf.getvalue()
+
+
 async def _handle_browser_response(
     audio_np,
     engine: "BaseEngine",
@@ -696,8 +708,13 @@ async def _handle_browser_response(
     retrieval,
     shutdown_event: asyncio.Event,
 ) -> None:
-    """Handle audio captured by the browser mic (already float32 numpy array at 16 kHz)."""
-    import time as _time
+    """Handle audio captured by the browser mic.
+
+    STT + LLM run on the Orin; TTS audio is returned to the browser
+    as base64-encoded WAV chunks so the browser plays it locally —
+    no ALSA/sounddevice output needed on the Orin when using ngrok.
+    """
+    import time as _time, base64 as _b64
     t_stt = _time.perf_counter()
     text = await asyncio.to_thread(stt.transcribe, audio_np)
     stt_ms = int((_time.perf_counter() - t_stt) * 1000)
@@ -718,10 +735,15 @@ async def _handle_browser_response(
     loop = asyncio.get_running_loop()
     active_retrieval = _app_state.get("retrieval", retrieval)
 
-    async def _speak(answer: str) -> None:
+    async def _speak_browser(answer: str) -> None:
+        """Synthesize answer and send WAV audio back to all browser clients."""
         print(f"\nJarvis: {answer}")
         await broadcast({"type": "text", "text": answer})
-        await asyncio.to_thread(tts.speak, answer)
+        pcm = await asyncio.to_thread(tts._synthesize_to_pcm, answer)
+        if pcm is not None:
+            wav_bytes = _pcm_to_wav_bytes(pcm, tts.samplerate)
+            audio_b64 = _b64.b64encode(wav_bytes).decode("utf-8")
+            await broadcast({"type": "audio_out", "audio_b64": audio_b64})
         await broadcast({"type": "state", "state": "idle"})
 
     # Special query routing (book awareness / page lookup)
@@ -731,11 +753,11 @@ async def _handle_browser_response(
         sources = []
 
     if is_book_list_query(text):
-        await _speak(format_book_list(sources))
+        await _speak_browser(format_book_list(sources))
         return
     bq = extract_book_name_query(text)
     if bq is not None:
-        await _speak(answer_book_query(bq, sources))
+        await _speak_browser(answer_book_query(bq, sources))
         return
     page_no = parse_page_number(text)
     page_chunks = []
@@ -745,7 +767,7 @@ async def _handle_browser_response(
         except Exception:
             page_chunks = []
         if not page_chunks:
-            await _speak(f"I couldn't find page {page_no} in the uploaded documents.")
+            await _speak_browser(f"I couldn't find page {page_no} in the uploaded documents.")
             return
 
     if page_chunks:
@@ -762,21 +784,77 @@ async def _handle_browser_response(
         pass
     stream = engine.get_stream(prompt_text)
 
-    def _latency_wrapper():
-        first = True
+    # Collect all LLM tokens, broadcast text chunks live, then synthesize full
+    # response as a single WAV and send back to browser for gapless playback.
+    full_text_parts: list[str] = []
+    first_token = True
+
+    def _collect_stream():
+        nonlocal first_token
         for chunk in stream:
-            if first:
+            if first_token:
                 ttft_ms = int((_time.perf_counter() - t_llm) * 1000)
                 print(f"\n\033[2m[TTFT: {ttft_ms}ms]\033[0m")
-                first = False
+                first_token = False
             try:
-                asyncio.run_coroutine_threadsafe(broadcast({"type": "text", "text": chunk}), loop)
+                asyncio.run_coroutine_threadsafe(
+                    broadcast({"type": "text", "text": chunk}), loop
+                )
             except Exception:
                 pass
+            full_text_parts.append(chunk)
             yield chunk
 
     print("Jarvis: ", end="", flush=True)
-    full_text = await asyncio.to_thread(tts.stream_text, _latency_wrapper())
+
+    # Run the sentence-level TTS in a thread, but capture PCM chunks and
+    # send them over the WebSocket instead of writing to sounddevice.
+    def _stream_tts_to_ws():
+        """Synthesize sentence by sentence; send each WAV chunk to the browser."""
+        from synthesis.text_norm import extract_complete_sentences, normalize_for_tts
+        import re as _re
+        buffer = ""
+        full_text = ""
+        pending_short = ""
+        SHORT_THRESH = 3
+
+        def _synth_and_send(sentence: str):
+            cleaned = sentence.strip()
+            if not cleaned:
+                return
+            pcm = tts._synthesize_to_pcm(cleaned)
+            if pcm is not None:
+                wav_bytes = _pcm_to_wav_bytes(pcm, tts.samplerate)
+                audio_b64 = _b64.b64encode(wav_bytes).decode("utf-8")
+                asyncio.run_coroutine_threadsafe(
+                    broadcast({"type": "audio_out", "audio_b64": audio_b64}), loop
+                )
+
+        for chunk in _collect_stream():
+            if not chunk:
+                continue
+            print(chunk, end="", flush=True)
+            buffer += chunk
+            full_text += chunk
+            results = extract_complete_sentences(buffer)
+            if results:
+                sentence, buffer = results[0]
+                if sentence.strip():
+                    wc = len(sentence.split())
+                    if not pending_short and wc <= SHORT_THRESH:
+                        pending_short = sentence
+                    else:
+                        to_speak = (pending_short + " " + sentence).strip() if pending_short else sentence
+                        pending_short = ""
+                        _synth_and_send(to_speak)
+
+        remaining = (pending_short + " " + buffer).strip() if pending_short else buffer.strip()
+        if remaining:
+            _synth_and_send(remaining)
+        print()
+        return full_text.strip()
+
+    full_text = await asyncio.to_thread(_stream_tts_to_ws)
     active_retrieval.cache_put(text, full_text)
     total_ms = int((_time.perf_counter() - t_llm) * 1000)
     print(f"\n\033[2m[Browser STT: {stt_ms}ms | Gen+Speech: {total_ms}ms]\033[0m")
