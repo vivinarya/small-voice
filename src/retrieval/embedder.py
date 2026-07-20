@@ -8,11 +8,31 @@ Both produce L2-normalized float32 vectors suitable for inner-product
 similarity search in FAISS IndexFlatIP.
 
 Requires: pip install sentence-transformers
+
+Offline mode:
+  TRANSFORMERS_OFFLINE=1 and HF_DATASETS_OFFLINE=1 are set at module
+  load time so the embedder NEVER makes network calls at runtime.
+  Models must be pre-downloaded to the HuggingFace cache before first use:
+
+      python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+  After that one-time download, the Jetson Orin Nano can operate with
+  no internet connection and the model loads instantly from local cache.
 """
 import logging
+import os
 from abc import ABC, abstractmethod
 
 import numpy as np
+
+# ── Enforce fully offline HuggingFace model loading ──────────────────────────
+# This prevents sentence-transformers / transformers from attempting any
+# network request at runtime. If the model is not already cached locally,
+# an OSError is raised immediately with a clear message rather than
+# silently hanging on a connection attempt.
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 logger = logging.getLogger(__name__)
 
