@@ -182,36 +182,51 @@ function Controls({
 }) {
   const isListening = state === "listening";
   const isIdle = state === "idle";
-  const isBusy = state === "processing" || state === "speaking";
+  const isProcessing = state === "processing";
+  const isSpeaking = state === "speaking";
+  const isBusy = isProcessing || isSpeaking;
+
+  // Use onPointerDown instead of onClick to eliminate the 300ms touch delay
+  // on mobile browsers — a single tap now fires instantly.
+  const handleMainPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    if (isIdle) onStart();
+  };
+
+  const handleStopPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    onStop();
+  };
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <AnimatePresence>
-        {isListening && (
+        {/* Show Stop button while listening OR while processing (lets user abort a stuck response) */}
+        {(isListening || isProcessing) && (
           <motion.button
             key="stop"
             initial={{ opacity: 0, scale: 0.85, x: 14 }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
             exit={{ opacity: 0, scale: 0.85, x: 14 }}
             transition={{ type: "spring", stiffness: 380, damping: 28 }}
-            onClick={onStop}
+            onPointerDown={handleStopPointerDown}
             style={{
               display: "flex", alignItems: "center", gap: 9,
               padding: "15px 26px",
               background: DARK, border: "none", borderRadius: 100,
-              cursor: "pointer", outline: "none",
+              cursor: "pointer", outline: "none", touchAction: "none",
             }}
           >
             <Square size={13} color="rgba(255,255,255,0.65)" strokeWidth={2.5} fill="rgba(255,255,255,0.65)" />
             <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: "rgba(255,255,255,0.65)", letterSpacing: "0.015em" }}>
-              Stop
+              {isProcessing ? "Cancel" : "Stop"}
             </span>
           </motion.button>
         )}
       </AnimatePresence>
 
       <motion.button
-        onClick={isIdle ? onStart : undefined}
+        onPointerDown={handleMainPointerDown}
         disabled={isBusy}
         style={{
           display: "flex", alignItems: "center", gap: 11,
@@ -221,13 +236,14 @@ function Controls({
           WebkitBackdropFilter: "blur(18px)",
           border: isListening ? "1px solid rgba(61,214,140,0.35)" : "1px solid rgba(255,255,255,0.85)",
           borderRadius: 100,
-          cursor: isBusy ? "default" : isListening ? "default" : "pointer",
+          cursor: isBusy ? "default" : "pointer",
           boxShadow: isListening
             ? "0 6px 32px rgba(61,214,140,0.22), 0 1px 4px rgba(0,0,0,0.06)"
             : "0 4px 28px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04)",
           outline: "none",
           position: "relative",
           overflow: "hidden",
+          touchAction: "none",
         }}
         whileHover={isIdle ? { scale: 1.025, transition: { type: "spring", stiffness: 400, damping: 20 } } : {}}
         whileTap={isIdle ? { scale: 0.96 } : {}}
@@ -235,7 +251,7 @@ function Controls({
         transition={isListening ? { duration: 2.4, repeat: Infinity, ease: "easeInOut" } : { type: "spring", stiffness: 300, damping: 24 }}
       >
         <AnimatePresence>
-          {state === "processing" && (
+          {isProcessing && (
             <motion.div
               key="overlay"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -265,7 +281,7 @@ function Controls({
             transition={{ duration: 0.18 }}
             style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 500, color: isListening ? DARK : TEXT, letterSpacing: "0.012em", whiteSpace: "nowrap" }}
           >
-            {isIdle ? "Tap to speak" : isListening ? "Listening…" : state === "processing" ? "Processing…" : "Speaking"}
+            {isIdle ? "Tap to speak" : isListening ? "Listening…" : isProcessing ? "Processing…" : "Speaking"}
           </motion.span>
         </AnimatePresence>
       </motion.button>
@@ -290,6 +306,8 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const silenceCleanupRef = useRef<(() => void) | null>(null);
+  // Safety timeout: if stuck in "processing" for >30s, auto-reset to idle
+  const processingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── Browser-side audio playback queue (for TTS WAV chunks from backend) ─────
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -321,13 +339,22 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
           if (s === "idle") {
             setState("idle");
             setTurns((prev) => prev.map((t) => ({ ...t, done: true })));
+            if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
           } else if (s === "listening" || s === "capturing") {
             setState("listening");
             setTurns([]);
+            if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
           } else if (s === "speaking") {
             setState("speaking");
+            if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
           } else if (s === "processing") {
             setState("processing");
+            // Auto-reset after 30s if backend never responds
+            if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+            processingTimeoutRef.current = setTimeout(() => {
+              setState("idle");
+              processingTimeoutRef.current = null;
+            }, 30000);
           }
         } else if (data.type === "text") {
           setState("speaking");
@@ -507,8 +534,19 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
     if (recorder && recorder.state !== "inactive") {
       recorder.stop();
       setState("processing");
-    } else if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "stop_listening" }));
+      // Safety timeout in case backend never replies
+      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = setTimeout(() => {
+        setState("idle");
+        processingTimeoutRef.current = null;
+      }, 30000);
+    } else {
+      // Already idle or in processing — just reset to idle (Cancel action)
+      setState("idle");
+      if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "stop_listening" }));
+      }
     }
   }, [ws]);
 
