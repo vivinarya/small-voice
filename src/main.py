@@ -107,7 +107,7 @@ async def ws_handler(websocket):
                         active_tts      = _app_state.get("tts",      None)
                         active_stt      = _app_state.get("stt",      None)
                         active_retrieval = _app_state.get("retrieval", None)
-                        if not all([active_engine, active_tts, active_stt, active_retrieval]):
+                        if active_engine is None or active_tts is None or active_stt is None or active_retrieval is None:
                             await websocket.send(json.dumps({"type": "error", "message": "Backend models not ready yet."}))
                         else:
                             shutdown_ev = asyncio.Event()
@@ -166,11 +166,12 @@ async def ws_handler(websocket):
                         cwd=project_root,
                     )
                     captured_output_lines: list[str] = []
-                    async for line in proc.stdout:
-                        msg = line.decode("utf-8", errors="replace").strip()
-                        if msg:
-                            captured_output_lines.append(msg)
-                            await websocket.send(json.dumps({"type": "index_progress", "message": msg}))
+                    if proc.stdout is not None:
+                        async for line in proc.stdout:
+                            msg = line.decode("utf-8", errors="replace").strip()
+                            if msg:
+                                captured_output_lines.append(msg)
+                                await websocket.send(json.dumps({"type": "index_progress", "message": msg}))
                     await proc.wait()
                     success = proc.returncode == 0
                     if success:
@@ -303,10 +304,11 @@ async def ws_handler(websocket):
                             stderr=asyncio.subprocess.STDOUT,
                             cwd=project_root,
                         )
-                        async for line in proc.stdout:
-                            msg = line.decode("utf-8", errors="replace").strip()
-                            if msg:
-                                await websocket.send(json.dumps({"type": "index_progress", "message": msg}))
+                        if proc.stdout is not None:
+                            async for line in proc.stdout:
+                                msg = line.decode("utf-8", errors="replace").strip()
+                                if msg:
+                                    await websocket.send(json.dumps({"type": "index_progress", "message": msg}))
                         await proc.wait()
                         success = proc.returncode == 0
                         await websocket.send(json.dumps({
@@ -921,6 +923,7 @@ async def _handle_browser_response(
     )
     loop = asyncio.get_running_loop()
     active_retrieval = _app_state.get("retrieval", retrieval)
+    assert active_retrieval is not None
 
     async def _speak_browser(answer: str) -> None:
         """Synthesize answer and send WAV audio back to all browser clients."""
@@ -957,7 +960,7 @@ async def _handle_browser_response(
             await _speak_browser(f"I couldn't find page {page_no} in the uploaded documents.")
             return
 
-    if page_chunks:
+    if page_no is not None and page_chunks:
         prompt_text = build_page_prompt(text, page_no, page_chunks)
     else:
         from knowledge.graph import fast_wiki_router
@@ -1177,6 +1180,7 @@ async def _handle_response(
     # hot-swap performed by rebuild_index takes effect immediately (Req 2.11).
     # Fall back to the parameter if _app_state is not yet populated.
     active_retrieval = _app_state.get("retrieval", retrieval)
+    assert active_retrieval is not None
 
     # ── Special-query routing: knowledge-base awareness + exact page lookup ──
     # These are answered deterministically from the index metadata rather than
@@ -1228,7 +1232,7 @@ async def _handle_response(
         await asyncio.to_thread(tts.speak, cached.answer_text)
         return cached.answer_text
 
-    if _page_chunks:
+    if _page_no is not None and _page_chunks:
         # Exact-page lookup: build a page-summary prompt from the page's chunks.
         prompt_text = build_page_prompt(text, _page_no, _page_chunks)
     else:

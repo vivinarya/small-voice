@@ -9,6 +9,7 @@ class BaseTTS(ABC):
     
     Implementations own synthesis, text normalization, and audio playback.
     """
+    samplerate: int = 22050
 
     @abstractmethod
     def speak(self, text: str) -> None:
@@ -26,6 +27,16 @@ class BaseTTS(ABC):
         Loop invariant: buffer holds only text after the last completed sentence boundary.
         """
         ...
+
+    def _synthesize_to_pcm(self, text: str) -> np.ndarray | None:
+        """Synthesize text to raw PCM numpy array without playing.
+        
+        Default returns None or delegates to synth_to_pcm. Override in implementations.
+        """
+        try:
+            return self.synth_to_pcm(text)
+        except NotImplementedError:
+            return None
 
     def synth_to_pcm(self, text: str) -> np.ndarray:
         """Optional: return PCM16 numpy array without playing (used for audio cache).
