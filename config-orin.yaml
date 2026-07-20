@@ -31,5 +31,5 @@ tts:
 retrieval:
   embed_backend: minilm
   index_dir: data/index
-  k: 3
+  k: 5                                                     # top-k chunks to inject — raised from 3 for richer RAG context
   min_score: 0.25

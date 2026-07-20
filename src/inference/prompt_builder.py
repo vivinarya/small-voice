@@ -30,7 +30,7 @@ _HONEST_DECLINE_TEMPLATE = (
 def build_prompt(
     user_text: str,
     retrieved: "list[RetrievedChunk]",
-    max_ctx_tokens: int = 600,
+    max_ctx_tokens: int = 900,
     index_available: bool = False,
 ) -> str:
     """Assemble an engine-neutral prompt from the user question and retrieved chunks.
@@ -75,7 +75,7 @@ def build_prompt(
     used_tokens = 0
     
     for rc in retrieved:
-        chunk_text = f"[{rc.citation()}] {rc.chunk.text}"
+        chunk_text = f"[{rc.citation()}]\n{rc.chunk.text}"
         t = _token_count(chunk_text)
         if used_tokens + t > max_ctx_tokens:
             break   # stop greedy fill — budget exhausted
@@ -87,11 +87,12 @@ def build_prompt(
         logger.debug("build_prompt: all chunks exceed token budget, returning bare question")
         return user_text
     
-    context_block = "\n".join(ctx_parts)
+    context_block = "\n\n".join(ctx_parts)
     prompt = (
-        "Use ONLY the document context below to answer. "
-        "Cite the document name and page number in your answer. "
-        "Keep your answer to 1-3 sentences.\n\n"
+        "You have access to the following excerpts from the user's uploaded documents. "
+        "Use ONLY this context to answer — do not use outside knowledge. "
+        "Cite the document name and page number naturally in your answer. "
+        "If multiple excerpts are relevant, synthesize them into a single clear answer.\n\n"
         f"Context:\n{context_block}\n\n"
         f"Question: {user_text}"
     )
@@ -107,19 +108,17 @@ def build_page_prompt(
     user_text: str,
     page: int,
     page_chunks: "list",
-    max_ctx_tokens: int = 280,
+    max_ctx_tokens: int = 420,
 ) -> str:
     """Assemble a prompt for an exact-page lookup ("read page N").
 
     `page_chunks` is a list of Chunk objects all belonging to `page` (sorted in
-    reading order). The page text is concatenated and capped tightly to keep
-    prefill latency low on small CPU models (a summary does not need the whole
-    page), then the model is asked to summarize the page and cite it.
+    reading order). The page text is concatenated and capped to keep prefill
+    latency reasonable while giving Qwen 3B enough context to summarize well.
     """
     source = page_chunks[0].source if page_chunks else "the document"
     # De-duplicate the sliding-window overlap so the context isn't padded with
     # repeated words (which would inflate prefill time for no benefit).
-    seen: set[str] = set()
     words: list[str] = []
     for c in page_chunks:
         for w in c.text.split():
@@ -128,9 +127,9 @@ def build_page_prompt(
             break
     body = " ".join(words[:max_ctx_tokens])
     return (
-        f"The text below is from page {page} of '{source}'. "
-        "In 2 to 4 short sentences, say what this page covers and that it is "
-        f"page {page} of {source}.\n\n"
+        f"The following is the text from page {page} of '{source}'. "
+        "Read it carefully and give a clear spoken summary of what this page covers in 2-4 natural sentences. "
+        f"Mention that it is page {page} of {source} in your answer.\n\n"
         f"Page {page} text:\n{body}\n\n"
         f"Request: {user_text}"
     )

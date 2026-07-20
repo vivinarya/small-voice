@@ -61,7 +61,9 @@ class OllamaEngine(BaseEngine):
                 model=self._model,
                 messages=messages,
                 stream=True,
-                max_tokens=256,
+                max_tokens=512,      # raised from 256 — Qwen 3B can give fuller answers
+                temperature=0.3,     # lower = more factual/focused (default is 0.8)
+                top_p=0.9,
             )
             yielded = False
             for chunk in stream:
