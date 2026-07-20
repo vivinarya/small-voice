@@ -129,6 +129,8 @@ async def ws_handler(websocket):
                 import base64
                 filename = data.get("filename", "document.pdf")
                 content_b64 = data.get("content_b64", "")
+                class_num = data.get("class_num")
+                subject = data.get("subject")
                 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 # Flat upload — all PDFs go into data/docs/ regardless of type
                 dest_dir = os.path.join(project_root, "data", "docs")
@@ -866,7 +868,42 @@ async def _handle_browser_response(
     """
     import time as _time, base64 as _b64
     t_stt = _time.perf_counter()
-    text = await asyncio.to_thread(stt.transcribe, audio_np)
+
+    # Build STT prompt for browser response (biases Whisper to domain terms)
+    import os, json as _json
+    wiki_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge", "vault", "wiki", "entities")
+    entity_names = ["Bangalore", "Whitefield", "Reachy Mini", "Dr. Anjali"]
+    if os.path.exists(wiki_dir):
+        from_files = [fn.replace(".md", "").replace("-", " ").title() for fn in os.listdir(wiki_dir) if fn.endswith(".md")]
+        entity_names.extend(from_files)
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    chunks_path = os.path.join(project_root, "data", "index", "chunks.jsonl")
+    if os.path.exists(chunks_path):
+        try:
+            domain_terms: set[str] = set()
+            with open(chunks_path, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if not _line:
+                        continue
+                    try:
+                        _chunk = _json.loads(_line)
+                        subj = _chunk.get("subject", "")
+                        chap = _chunk.get("chapter", "")
+                        if subj:
+                            domain_terms.add(subj.strip())
+                        if chap:
+                            chap_words = chap.strip().split()[:3]
+                            domain_terms.add(" ".join(chap_words))
+                    except Exception:
+                        continue
+            entity_names.extend(list(domain_terms)[:20])
+        except Exception:
+            pass
+
+    stt_prompt = ", ".join(list(set(entity_names))[:30])
+    text = await asyncio.to_thread(stt.transcribe, audio_np, initial_prompt=stt_prompt)
     stt_ms = int((_time.perf_counter() - t_stt) * 1000)
     if not text:
         await broadcast({"type": "state", "state": "idle", "details": "Couldn't hear anything — try again."})
@@ -923,7 +960,18 @@ async def _handle_browser_response(
     if page_chunks:
         prompt_text = build_page_prompt(text, page_no, page_chunks)
     else:
-        chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+        from knowledge.graph import fast_wiki_router
+        wiki_context = fast_wiki_router(text)
+        if wiki_context:
+            from retrieval.base import Chunk, RetrievedChunk
+            chunks = [
+                RetrievedChunk(
+                    chunk=Chunk(id="wiki_hit", text=wiki_context, source="Knowledge Vault", page=1),
+                    score=1.0
+                )
+            ]
+        else:
+            chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
         prompt_text = build_prompt(text, chunks)
 
     # Generate and send one-shot "Thinking." voice chunk
@@ -1184,8 +1232,19 @@ async def _handle_response(
         # Exact-page lookup: build a page-summary prompt from the page's chunks.
         prompt_text = build_page_prompt(text, _page_no, _page_chunks)
     else:
-        # Retrieve relevant context via semantic search.
-        chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+        from knowledge.graph import fast_wiki_router
+        wiki_context = fast_wiki_router(text)
+        if wiki_context:
+            from retrieval.base import Chunk, RetrievedChunk
+            chunks = [
+                RetrievedChunk(
+                    chunk=Chunk(id="wiki_hit", text=wiki_context, source="Knowledge Vault", page=1),
+                    score=1.0
+                )
+            ]
+        else:
+            # Retrieve relevant context via semantic search.
+            chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
         prompt_text = build_prompt(text, chunks)
 
     t_llm_start = time.perf_counter()
