@@ -3,6 +3,9 @@ import sys
 import os
 import time
 import warnings
+import http
+import mimetypes
+import pathlib
 import numpy as np
 import sounddevice as sd
 import websockets
@@ -548,45 +551,83 @@ def show_status(state: str, details: str = ""):
     except Exception:
         pass
 
+# ── Combined HTTP + WebSocket request handler (websockets 12+) ───────────────
+# Serves the frontend dist/ folder for regular HTTP GET requests so that both
+# the frontend and the WebSocket share a single port (8080).  This means the
+# free ngrok plan only needs ONE tunnel:  ngrok http 8080
+#   • Browser opens https://<ngrok>.ngrok-free.app  → gets the React UI
+#   • React connects to  wss://<ngrok>.ngrok-free.app  → same tunnel, WS upgrade
+_DIST_DIR: str = ""
+
+async def _process_request(connection, request):
+    """Intercept plain HTTP GET requests and serve frontend static files.
+
+    Returning a Response object short-circuits the WebSocket handshake and
+    sends the HTTP response directly.  Returning None lets websockets proceed
+    with the normal WebSocket upgrade (used for all WS clients).
+    """
+    # Only intercept if the client is NOT requesting a WebSocket upgrade
+    upgrade = request.headers.get("Upgrade", "").lower()
+    if upgrade == "websocket":
+        return None  # proceed with WebSocket handshake as normal
+
+    if not _DIST_DIR or not os.path.isdir(_DIST_DIR):
+        # No frontend dist built yet — return a plain text hint
+        body = b"Frontend not built. Run: cd frontend && npm run build"
+        headers = {"Content-Type": "text/plain", "Content-Length": str(len(body))}
+        return connection.respond(http.HTTPStatus.OK, headers, body)
+
+    # Strip query string and resolve path
+    clean_path = request.path.split("?")[0].lstrip("/")
+    file_path = pathlib.Path(_DIST_DIR) / (clean_path or "index.html")
+
+    # SPA fallback: unknown paths → index.html so React Router works
+    if not file_path.exists() or not file_path.is_file():
+        file_path = pathlib.Path(_DIST_DIR) / "index.html"
+
+    try:
+        content = file_path.read_bytes()
+        mime, _ = mimetypes.guess_type(str(file_path))
+        headers = {
+            "Content-Type": mime or "application/octet-stream",
+            "Content-Length": str(len(content)),
+            "Cache-Control": "no-cache",
+        }
+        return connection.respond(http.HTTPStatus.OK, headers, content)
+    except Exception:
+        body = b"Not found"
+        headers = {"Content-Type": "text/plain", "Content-Length": str(len(body))}
+        return connection.respond(http.HTTPStatus.NOT_FOUND, headers, body)
+
+
 # Main Thread Loop
 async def main_loop() -> None:
+    global _DIST_DIR
+    _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _DIST_DIR = os.path.join(_project_root, "frontend", "dist")
+
     # Start WebSocket Server
     try:
-        # Port 8765: local WebSocket for same-machine access
+        # Port 8765: local WebSocket for same-machine access (no process_request needed)
         await websockets.serve(
             ws_handler, "localhost", 8765, max_size=200 * 1024 * 1024
         )
-        # Port 8080: WebSocket bound on all interfaces for ngrok tunnel access.
-        # ngrok http 8080 automatically forwards WebSocket upgrade requests.
+        # Port 8080: combined HTTP + WebSocket server for ngrok access.
+        # Regular HTTP GET → serves frontend dist/
+        # WebSocket Upgrade → handled by ws_handler
+        # Free ngrok plan:  ngrok http 8080  (single tunnel covers everything)
         await websockets.serve(
-            ws_handler, "0.0.0.0", 8080, max_size=200 * 1024 * 1024
+            ws_handler, "0.0.0.0", 8080,
+            max_size=200 * 1024 * 1024,
+            process_request=_process_request,
         )
-        # Serve frontend static files on port 8090 (separate from WebSocket ports)
-        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        _dist_dir = os.path.join(_project_root, "frontend", "dist")
-        if os.path.isdir(_dist_dir):
-            import threading as _threading
-            import http.server as _hs
-            import pathlib as _pl
-
-            class _SPAHandler(_hs.SimpleHTTPRequestHandler):
-                def __init__(self, *a, **kw):
-                    super().__init__(*a, directory=_dist_dir, **kw)
-                def log_message(self, *a):
-                    pass
-                def do_GET(self):
-                    p = _pl.Path(_dist_dir + self.path.split("?")[0])
-                    if not p.exists() or not p.is_file():
-                        self.path = "/index.html"
-                    super().do_GET()
-
-            _httpd = _hs.HTTPServer(("0.0.0.0", 8090), _SPAHandler)
-            _t = _threading.Thread(target=_httpd.serve_forever, daemon=True)
-            _t.start()
-            print("[HTTP] Frontend on http://0.0.0.0:8090", flush=True)
-        print("[WS]   WebSocket on ws://0.0.0.0:8080  (ngrok: ngrok http 8080)", flush=True)
+        if os.path.isdir(_DIST_DIR):
+            print("[HTTP] Frontend + WS on http://0.0.0.0:8080  (ngrok: ngrok http 8080)", flush=True)
+        else:
+            print("[HTTP] Frontend dist/ not found — run: cd frontend && npm run build", flush=True)
+            print("[WS]   WebSocket on ws://0.0.0.0:8080  (ngrok: ngrok http 8080)", flush=True)
     except Exception as e:
-        print(f"[WS] Failed to start WebSocket server: {e}")
+        print(f"[WS] Failed to start server: {e}")
 
     draw_header()
     print("\n[SYSTEM] Loading offline AI models into memory. Please wait...", flush=True)

@@ -17,23 +17,30 @@ const DARK = "#1e1d1b";
 
 // ─── Shared WebSocket hook ─────────────────────────────────────────────────────
 function getWsUrl(): string {
-  // Check if a build-time Vite environment variable was set (e.g. VITE_WS_URL)
-  // or a query parameter is specified.
+  // Priority 1: build-time Vite env variable (e.g. VITE_WS_URL set during npm run build)
   const fromEnv = (import.meta as any).env?.VITE_WS_URL;
   if (fromEnv) return fromEnv;
 
-  const { protocol, hostname } = window.location;
+  // Priority 2: runtime ?ws= query param (e.g. ?ws=wss://custom.ngrok-free.app)
   const params = new URLSearchParams(window.location.search);
   const fromQuery = params.get("ws");
   if (fromQuery) return fromQuery;
 
-  if (hostname !== "localhost" && hostname !== "127.0.0.1") {
-    // Accessed remotely (e.g. via ngrok) — WebSocket is on port 8080 same host
-    const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
-    return `${wsProtocol}//${hostname}:8080`;
+  const { protocol, hostname } = window.location;
+
+  // Local dev: connect directly to the backend on port 8765
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "ws://localhost:8765";
   }
-  return "ws://localhost:8765";
+
+  // Remote access (e.g. via ngrok free plan):
+  // Both the frontend and WebSocket are served from the same port (8080) behind
+  // a single ngrok tunnel that exposes standard HTTPS/WSS (port 443 externally).
+  // Do NOT append :8080 — ngrok only forwards the standard port.
+  const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProtocol}//${hostname}`;
 }
+
 
 function useSharedWS(url: string) {
   const wsRef = useRef<WebSocket | null>(null);
