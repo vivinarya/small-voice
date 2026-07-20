@@ -551,13 +551,33 @@ def show_status(state: str, details: str = ""):
     except Exception:
         pass
 
-# ── Combined HTTP + WebSocket request handler (websockets 12+) ───────────────
+# ── Combined HTTP + WebSocket request handler (websockets 12+) ────────────────
 # Serves the frontend dist/ folder for regular HTTP GET requests so that both
 # the frontend and the WebSocket share a single port (8080).  This means the
 # free ngrok plan only needs ONE tunnel:  ngrok http 8080
 #   • Browser opens https://<ngrok>.ngrok-free.app  → gets the React UI
 #   • React connects to  wss://<ngrok>.ngrok-free.app  → same tunnel, WS upgrade
 _DIST_DIR: str = ""
+
+# Import the websockets 12 Response/Headers types used in _process_request.
+from websockets.http11 import Response as _WsResponse          # noqa: E402
+from websockets.datastructures import Headers as _WsHeaders    # noqa: E402
+
+
+def _make_http_response(
+    status_code: int,
+    reason: str,
+    body: bytes,
+    content_type: str = "application/octet-stream",
+) -> "_WsResponse":
+    """Build a websockets 12 Response object for serving static files."""
+    headers = _WsHeaders([
+        ("Content-Type", content_type),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-cache"),
+    ])
+    return _WsResponse(status_code, reason, headers, body)
+
 
 async def _process_request(connection, request):
     """Intercept plain HTTP GET requests and serve frontend static files.
@@ -572,10 +592,8 @@ async def _process_request(connection, request):
         return None  # proceed with WebSocket handshake as normal
 
     if not _DIST_DIR or not os.path.isdir(_DIST_DIR):
-        # No frontend dist built yet — return a plain text hint
         body = b"Frontend not built. Run: cd frontend && npm run build"
-        headers = {"Content-Type": "text/plain", "Content-Length": str(len(body))}
-        return connection.respond(http.HTTPStatus.OK, headers, body)
+        return _make_http_response(200, "OK", body, "text/plain; charset=utf-8")
 
     # Strip query string and resolve path
     clean_path = request.path.split("?")[0].lstrip("/")
@@ -588,16 +606,10 @@ async def _process_request(connection, request):
     try:
         content = file_path.read_bytes()
         mime, _ = mimetypes.guess_type(str(file_path))
-        headers = {
-            "Content-Type": mime or "application/octet-stream",
-            "Content-Length": str(len(content)),
-            "Cache-Control": "no-cache",
-        }
-        return connection.respond(http.HTTPStatus.OK, headers, content)
-    except Exception:
-        body = b"Not found"
-        headers = {"Content-Type": "text/plain", "Content-Length": str(len(body))}
-        return connection.respond(http.HTTPStatus.NOT_FOUND, headers, body)
+        return _make_http_response(200, "OK", content, mime or "application/octet-stream")
+    except Exception as exc:
+        body = f"Error serving file: {exc}".encode()
+        return _make_http_response(500, "Internal Server Error", body, "text/plain")
 
 
 # Main Thread Loop
