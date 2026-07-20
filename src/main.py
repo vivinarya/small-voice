@@ -862,6 +862,28 @@ async def _handle_browser_response(
     retrieval,
     shutdown_event: asyncio.Event,
 ) -> None:
+    import traceback
+    try:
+        await _handle_browser_response_inner(
+            audio_np, engine, tts, stt, retrieval, shutdown_event
+        )
+    except Exception as exc:
+        print(f"\n[ERROR] in _handle_browser_response: {exc}", flush=True)
+        traceback.print_exc()
+        try:
+            await broadcast({"type": "error", "message": f"Server error: {exc}"})
+            await broadcast({"type": "state", "state": "idle"})
+        except Exception:
+            pass
+
+async def _handle_browser_response_inner(
+    audio_np,
+    engine: "BaseEngine",
+    tts: "BaseTTS",
+    stt: "BaseSTT",
+    retrieval,
+    shutdown_event: asyncio.Event,
+) -> None:
     """Handle audio captured by the browser mic.
 
     STT + LLM run on the Orin; TTS audio is returned to the browser
