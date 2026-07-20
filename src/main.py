@@ -277,7 +277,6 @@ async def ws_handler(websocket):
                 except Exception as exc:
                     await websocket.send(json.dumps({"type": "index_done", "success": False, "message": str(exc)}))
             elif data.get("type") == "delete_doc":
-                import os, sys as _sys
                 source_name = data.get("source", "")
                 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 docs_dir = os.path.join(project_root, "data", "docs")
@@ -296,7 +295,7 @@ async def ws_handler(websocket):
                         out_dir = os.path.join(project_root, "data", "index")
                         await websocket.send(json.dumps({"type": "index_progress", "message": "Rebuilding index after document deletion..."}))
                         proc = await asyncio.create_subprocess_exec(
-                            _sys.executable, script,
+                            sys.executable, script,
                             "--src", docs_dir, "--out", out_dir, "--embed", "minilm",
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.STDOUT,
