@@ -46,17 +46,41 @@ function useSharedWS(url: string) {
   const wsRef = useRef<WebSocket | null>(null);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [wsReady, setWsReady] = useState(false);
+  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+
+    const stopPing = () => {
+      if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; }
+    };
+
+    const startPing = (socket: WebSocket) => {
+      stopPing();
+      // Send a heartbeat every 25s to prevent ngrok from closing idle connections
+      pingRef.current = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 25000);
+    };
+
     const connect = () => {
       setWsReady(false);
       const socket = new WebSocket(url);
       wsRef.current = socket;
+
       socket.onopen = () => {
-        if (!cancelled) { setWs(socket); setWsReady(true); }
+        if (!cancelled) {
+          setWs(socket);
+          setWsReady(true);
+          startPing(socket);
+        }
       };
-      socket.onclose = () => {
+
+      socket.onclose = (ev) => {
+        console.warn(`[WS] closed — code=${ev.code} reason='${ev.reason}'`);
+        stopPing();
         if (!cancelled) {
           wsRef.current = null;
           setWs(null);
@@ -64,10 +88,16 @@ function useSharedWS(url: string) {
           setTimeout(connect, 2000);
         }
       };
+
+      socket.onerror = (ev) => {
+        console.error("[WS] error", ev);
+      };
     };
+
     connect();
     return () => {
       cancelled = true;
+      stopPing();
       wsRef.current?.close();
     };
   }, [url]);

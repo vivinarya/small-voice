@@ -62,6 +62,9 @@ async def ws_handler(websocket):
                 ui_wake_event.set()
             elif data.get("type") == "stop_listening":
                 ui_stop_event.set()
+            elif data.get("type") == "ping":
+                # Heartbeat from browser — keep connection alive through ngrok idle timeout
+                await websocket.send(json.dumps({"type": "pong"}))
             elif data.get("type") == "browser_audio":
                 # Audio captured by the browser mic and sent as base64 WebM/WAV.
                 # Decode, convert to float32 PCM, run STT + full response pipeline.
