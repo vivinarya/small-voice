@@ -30,6 +30,8 @@ async def broadcast(message_dict):
         websockets.broadcast(CONNECTED_CLIENTS, msg)
 
 async def ws_handler(websocket):
+    remote = getattr(websocket, 'remote_address', 'unknown')
+    print(f"[WS] Client connected from {remote}", flush=True)
     CONNECTED_CLIENTS.add(websocket)
     try:
         async for message in websocket:
@@ -439,9 +441,10 @@ async def ws_handler(websocket):
                     except Exception as exc:
                         await websocket.send(_json.dumps({"type": "ncert_graph_data", "nodes": [], "edges": [], "error": str(exc)}))
     except Exception as e:
-        pass
+        print(f"[WS] Handler error: {e}", flush=True)
     finally:
-        CONNECTED_CLIENTS.remove(websocket)
+        print(f"[WS] Client disconnected", flush=True)
+        CONNECTED_CLIENTS.discard(websocket)
 
 # Enable UTF-8 encoding on standard streams to support colored characters on Windows
 try:
@@ -585,13 +588,17 @@ def _make_http_response(
 async def _process_request(connection, request):
     """Intercept plain HTTP GET requests and serve frontend static files.
 
-    Returning a Response object short-circuits the WebSocket handshake and
-    sends the HTTP response directly.  Returning None lets websockets proceed
-    with the normal WebSocket upgrade (used for all WS clients).
+    WebSocket upgrade requests ALWAYS contain a 'Sec-WebSocket-Key' header.
+    Regular browser HTTP requests (for HTML/CSS/JS assets) never have this.
+    Using Sec-WebSocket-Key is more reliable than checking the Upgrade header
+    because some proxies (including ngrok) may normalise or forward headers
+    differently.
     """
-    # Only intercept if the client is NOT requesting a WebSocket upgrade
-    upgrade = request.headers.get("Upgrade", "").lower()
-    if upgrade == "websocket":
+    # If this is a real WebSocket upgrade, let websockets handle it
+    ws_key = (request.headers.get("Sec-WebSocket-Key")
+              or request.headers.get("sec-websocket-key")
+              or request.headers.get("SEC-WEBSOCKET-KEY"))
+    if ws_key:
         return None  # proceed with WebSocket handshake as normal
 
     if not _DIST_DIR or not os.path.isdir(_DIST_DIR):
@@ -635,6 +642,7 @@ async def main_loop() -> None:
             ws_handler, "0.0.0.0", 8080,
             max_size=200 * 1024 * 1024,
             process_request=_process_request,
+            ping_interval=None,   # disable built-in WS pings; browser handles keepalive
         )
         if os.path.isdir(_DIST_DIR):
             print("[HTTP] Frontend + WS on http://0.0.0.0:8080  (ngrok: ngrok http 8080)", flush=True)
