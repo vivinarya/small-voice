@@ -45,19 +45,22 @@ function getWsUrl(): string {
 function useSharedWS(url: string) {
   const wsRef = useRef<WebSocket | null>(null);
   const [ws, setWs] = useState<WebSocket | null>(null);
+  const [wsReady, setWsReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const connect = () => {
+      setWsReady(false);
       const socket = new WebSocket(url);
       wsRef.current = socket;
       socket.onopen = () => {
-        if (!cancelled) setWs(socket);
+        if (!cancelled) { setWs(socket); setWsReady(true); }
       };
       socket.onclose = () => {
         if (!cancelled) {
           wsRef.current = null;
           setWs(null);
+          setWsReady(false);
           setTimeout(connect, 2000);
         }
       };
@@ -69,7 +72,7 @@ function useSharedWS(url: string) {
     };
   }, [url]);
 
-  return ws;
+  return { ws, wsReady };
 }
 
 // ─── Nav pill ─────────────────────────────────────────────────────────────────
@@ -175,22 +178,24 @@ function Controls({
   state,
   onStart,
   onStop,
+  wsReady,
 }: {
   state: JarvisState;
   onStart: () => void;
   onStop: () => void;
+  wsReady: boolean;
 }) {
   const isListening = state === "listening";
   const isIdle = state === "idle";
   const isProcessing = state === "processing";
   const isSpeaking = state === "speaking";
   const isBusy = isProcessing || isSpeaking;
+  // Fully interactive only when WS is open and not busy
+  const canStart = wsReady && isIdle;
 
-  // Use onPointerDown instead of onClick to eliminate the 300ms touch delay
-  // on mobile browsers — a single tap now fires instantly.
   const handleMainPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
-    if (isIdle) onStart();
+    if (canStart) onStart();
   };
 
   const handleStopPointerDown = (e: React.PointerEvent) => {
@@ -201,7 +206,6 @@ function Controls({
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <AnimatePresence>
-        {/* Show Stop button while listening OR while processing (lets user abort a stuck response) */}
         {(isListening || isProcessing) && (
           <motion.button
             key="stop"
@@ -236,7 +240,7 @@ function Controls({
           WebkitBackdropFilter: "blur(18px)",
           border: isListening ? "1px solid rgba(61,214,140,0.35)" : "1px solid rgba(255,255,255,0.85)",
           borderRadius: 100,
-          cursor: isBusy ? "default" : "pointer",
+          cursor: isBusy ? "default" : canStart ? "pointer" : "not-allowed",
           boxShadow: isListening
             ? "0 6px 32px rgba(61,214,140,0.22), 0 1px 4px rgba(0,0,0,0.06)"
             : "0 4px 28px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04)",
@@ -244,9 +248,10 @@ function Controls({
           position: "relative",
           overflow: "hidden",
           touchAction: "none",
+          opacity: !wsReady && isIdle ? 0.65 : 1,
         }}
-        whileHover={isIdle ? { scale: 1.025, transition: { type: "spring", stiffness: 400, damping: 20 } } : {}}
-        whileTap={isIdle ? { scale: 0.96 } : {}}
+        whileHover={canStart ? { scale: 1.025, transition: { type: "spring", stiffness: 400, damping: 20 } } : {}}
+        whileTap={canStart ? { scale: 0.96 } : {}}
         animate={isListening ? { scale: [1, 1.018, 1] } : { scale: 1 }}
         transition={isListening ? { duration: 2.4, repeat: Infinity, ease: "easeInOut" } : { type: "spring", stiffness: 300, damping: 24 }}
       >
@@ -270,18 +275,29 @@ function Controls({
           )}
         </AnimatePresence>
 
+        {/* WS connection dot */}
+        <motion.div
+          style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: wsReady ? MINT : "#E08080",
+            flexShrink: 0,
+          }}
+          animate={wsReady ? {} : { opacity: [1, 0.3, 1] }}
+          transition={{ duration: 1, repeat: Infinity }}
+        />
+
         <motion.div animate={{ scale: isListening ? [1, 1.12, 1] : 1 }} transition={isListening ? { duration: 1.6, repeat: Infinity } : {}}>
           <Mic size={15} strokeWidth={2.2} color={isListening ? DARK : TEXT} />
         </motion.div>
 
         <AnimatePresence mode="wait">
           <motion.span
-            key={state}
+            key={wsReady ? state : "connecting"}
             initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }}
             transition={{ duration: 0.18 }}
             style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 500, color: isListening ? DARK : TEXT, letterSpacing: "0.012em", whiteSpace: "nowrap" }}
           >
-            {isIdle ? "Tap to speak" : isListening ? "Listening…" : isProcessing ? "Processing…" : "Speaking"}
+            {!wsReady && isIdle ? "Connecting…" : isIdle ? "Tap to speak" : isListening ? "Listening…" : isProcessing ? "Processing…" : "Speaking"}
           </motion.span>
         </AnimatePresence>
       </motion.button>
@@ -296,7 +312,7 @@ interface Turn {
   done: boolean;
 }
 
-function SpeakView({ ws }: { ws: WebSocket | null }) {
+function SpeakView({ ws, wsReady }: { ws: WebSocket | null; wsReady: boolean }) {
   const [state, setState] = useState<JarvisState>("idle");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [micError, setMicError] = useState<string | null>(null);
@@ -454,6 +470,7 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
 
       let lastSoundTime = Date.now();
       let isSilent = false;
+      let hasSpeech = false; // only start silence countdown after user actually speaks
       let rafId: number;
 
       const checkSilence = () => {
@@ -464,17 +481,26 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
           sumSquares += norm * norm;
         }
         const rms = Math.sqrt(sumSquares / bufferLength);
-        const threshold = 0.012; // RMS silence threshold
+        const threshold = 0.012;
         const now = Date.now();
 
-        if (rms < threshold) {
-          if (!isSilent) {
-            isSilent = true;
+        if (rms >= threshold) {
+          // Speech detected
+          hasSpeech = true;
+          isSilent = false;
+          lastSoundTime = now;
+          setSilenceHint(null);
+        } else {
+          // Silence — only start countdown if speech was already heard
+          if (!hasSpeech) {
+            rafId = requestAnimationFrame(checkSilence);
+            return;
           }
+          if (!isSilent) isSilent = true;
           const silenceDuration = now - lastSoundTime;
           if (silenceDuration > 1000) {
             const remaining = Math.max(0, Math.ceil((3000 - silenceDuration) / 1000));
-            setSilenceHint(`Silent... auto-submitting in ${remaining}s`);
+            setSilenceHint(`Silent… auto-submitting in ${remaining}s`);
           }
           if (silenceDuration >= 3000) {
             const rec = mediaRecorderRef.current;
@@ -484,10 +510,6 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
             }
             return;
           }
-        } else {
-          isSilent = false;
-          lastSoundTime = now;
-          setSilenceHint(null);
         }
         rafId = requestAnimationFrame(checkSilence);
       };
@@ -771,7 +793,7 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
             </motion.div>
           )}
         </AnimatePresence>
-        <Controls state={state} onStart={handleStart} onStop={handleStop} />
+        <Controls state={state} onStart={handleStart} onStop={handleStop} wsReady={wsReady} />
       </motion.footer>
     </div>
   );
@@ -780,7 +802,7 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [view, setView] = useState<AppView>("speak");
-  const ws = useSharedWS(getWsUrl());
+  const { ws, wsReady } = useSharedWS(getWsUrl());
   const [indexedDocs, setIndexedDocs] = useState<any[]>([]);
   const [graphRefreshKey, setGraphRefreshKey] = useState(0);
 
@@ -835,7 +857,7 @@ export default function App() {
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <SpeakView ws={ws} />
+            <SpeakView ws={ws} wsReady={wsReady} />
           </motion.div>
         ) : view === "graph" ? (
           <motion.div
