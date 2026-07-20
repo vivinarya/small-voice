@@ -80,11 +80,96 @@ def _ordinal_to_words(n: int) -> str:
 def normalize_for_tts(text: str) -> str:
     """Normalize text for natural TTS output.
 
+    - Converts LaTeX math expressions, sets, symbols and markdown to readable English
     - Expands common abbreviations (Dr., Mr., e.g., etc.)
     - Converts ordinals (1st → first) and plain numbers (42 → forty two)
     - Does NOT strip sentence-terminal punctuation
     """
-    # Expand abbreviations first (before number expansion strips periods)
+    # 1. LaTeX display and inline math delimiters removal
+    text = text.replace(r"\[", " ").replace(r"\]", " ")
+    text = text.replace(r"\(", " ").replace(r"\)", " ")
+
+    # 2. LaTeX fractions: \frac{a}{b} -> a over b
+    # Loop to support nested fractions if any
+    for _ in range(3):
+        text = re.sub(r'\\frac\s*\{([^}]+)\}\s*\{([^}]+)\}', r' \1 over \2 ', text)
+
+    # 3. LaTeX square roots: \sqrt{x} -> the square root of x
+    text = re.sub(r'\\sqrt\s*\{([^}]+)\}', r' the square root of \1 ', text)
+
+    # 4. LaTeX set braces: \{ and \}
+    text = text.replace(r"\{", " ").replace(r"\}", " ")
+
+    # 5. LaTeX standard relational and set operations
+    latex_replacements = [
+        (r'\\geq\b', " greater than or equal to "),
+        (r'\\geq', " greater than or equal to "),
+        (r'\\le\b', " less than or equal to "),
+        (r'\\le', " less than or equal to "),
+        (r'\\leq\b', " less than or equal to "),
+        (r'\\leq', " less than or equal to "),
+        (r'\\neq\b', " not equal to "),
+        (r'\\neq', " not equal to "),
+        (r'\\approx\b', " approximately "),
+        (r'\\approx', " approximately "),
+        (r'\\times\b', " times "),
+        (r'\\times', " times "),
+        (r'\\div\b', " divided by "),
+        (r'\\div', " divided by "),
+        (r'\\cdot\b', " times "),
+        (r'\\cdot', " times "),
+        (r'\\in\b', " in "),
+        (r'\\in', " in "),
+        (r'\\subset\b', " is a subset of "),
+        (r'\\subset', " is a subset of "),
+        (r'\\cup\b', " union "),
+        (r'\\cup', " union "),
+        (r'\\cap\b', " intersection "),
+        (r'\\cap', " intersection "),
+        (r'\\infty\b', " infinity "),
+        (r'\\infty', " infinity "),
+        (r'\\sum\b', " sum "),
+        (r'\\sum', " sum "),
+    ]
+    for pattern, rep in latex_replacements:
+        text = re.sub(pattern, rep, text)
+
+    # 6. LaTeX exponents and subscripts: x^2 -> x squared, x_i -> x subscript i
+    text = re.sub(r'\^2\b', " squared ", text)
+    text = re.sub(r'\^3\b', " cubed ", text)
+    text = re.sub(r'\^\{?([^}]+)\}?', r' to the power of \1 ', text)
+    text = re.sub(r'_\{?([^}]+)\}?', r' subscript \1 ', text)
+
+    # 7. Math symbols and operators translation (only in math context/numbers)
+    # Plus, minus, times, divided by, equals, greater than, less than, absolute value
+    text = re.sub(r'(?<=\w|\s)\+(?=\w|\s)', " plus ", text)
+    text = re.sub(r'(?<=\w|\s)-(?=\w|\s)', " minus ", text)
+    text = re.sub(r'(?<=\w|\s)\*(?=\w|\s)', " times ", text)
+    text = re.sub(r'(?<=\w|\s)/(?=\w|\s)', " divided by ", text)
+    text = re.sub(r'(?<=\w|\s)=(?=\w|\s)', " equals ", text)
+    text = re.sub(r'(?<=\w|\s)>(?=\w|\s)', " greater than ", text)
+    text = re.sub(r'(?<=\w|\s)<(?=\w|\s)', " less than ", text)
+    # Absolute value: |x| -> absolute value of x
+    text = re.sub(r'\|([^|]+)\|', r' absolute value of \1 ', text)
+
+    # 8. Clean up brackets/punctuation that TTS shouldn't pronounce literally
+    text = text.replace("{", " ").replace("}", " ")
+    text = text.replace("(", " ").replace(")", " ")
+    text = text.replace("[", " ").replace("]", " ")
+    text = text.replace(":", " ")
+
+    # 9. Markdown clean up
+    text = re.sub(r'\*\*|__', "", text)
+    text = re.sub(r'\*|_', "", text)
+    text = re.sub(r'`', "", text)
+    text = re.sub(r'^\s*#+\s+', "", text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*[-*+]\s+', "", text, flags=re.MULTILINE)
+
+    # 10. Strip remaining/leftover backslashes and LaTeX commands
+    text = re.sub(r'\\[a-zA-Z]+', "", text)
+    text = text.replace("\\", "")
+
+    # Expand abbreviations (before number expansion)
     for pattern, replacement in _ABBREV_EXPAND:
         text = pattern.sub(replacement, text)
 
@@ -100,6 +185,9 @@ def normalize_for_tts(text: str) -> str:
             return _int_to_words(n)
         return m.group(0)  # leave large numbers unchanged
     text = _NUMBER_RE.sub(replace_number, text)
+
+    # 11. Normalize whitespaces
+    text = re.sub(r'\s+', " ", text).strip()
 
     return text
 

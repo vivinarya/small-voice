@@ -30,46 +30,10 @@ interface GEdge {
 
 // ── Default wiki nodes (shown when no NCERT index exists) ────────────────────
 let NODES_RAW: Array<{ id: string; label: string; desc: string; nodeType?: GNode["nodeType"] }> = [
-  { id: "jarvis",      label: "JARVIS",            desc: "Core intelligence. Orchestrates all subsystems and manages real-time interaction.", nodeType: "jarvis" },
-  { id: "voice",       label: "Voice Recognition", desc: "Real-time voice pattern analysis. Speech-to-intent conversion at 99.2% accuracy.", nodeType: "wiki" },
-  { id: "neural",      label: "Neural Networks",   desc: "Deep learning inference for reasoning, prediction, and language understanding.", nodeType: "wiki" },
-  { id: "memory",      label: "Memory Banks",      desc: "Episodic and semantic memory. Full context retained across every session.", nodeType: "wiki" },
-  { id: "security",    label: "Security",          desc: "Multi-layer threat detection. Zero breaches in 847 operational days.", nodeType: "wiki" },
-  { id: "env",         label: "Environmental Scan",desc: "Sensor fusion monitoring ambient conditions, spatial awareness, threat vectors.", nodeType: "wiki" },
-  { id: "quantum",     label: "Quantum Core",      desc: "Quantum co-processor handling parallel computation on complex optimizations.", nodeType: "wiki" },
-  { id: "user",        label: "User Profile",       desc: "Behavioral model, preferences, and biometric data. Updated continuously.", nodeType: "wiki" },
-  { id: "calendar",    label: "Scheduling",         desc: "Predictive scheduling engine with conflict resolution and priority balancing.", nodeType: "wiki" },
-  { id: "research",    label: "Research DB",        desc: "Indexed knowledge base with real-time integration and source verification.", nodeType: "wiki" },
-  { id: "comms",       label: "Communications",     desc: "Message routing, drafting assistance, and relationship graph management.", nodeType: "wiki" },
-  { id: "diagnostics", label: "Diagnostics",        desc: "Real-time performance monitoring. All systems currently nominal.", nodeType: "wiki" },
-  { id: "weather",     label: "Weather",            desc: "Hyperlocal atmospheric modeling. 72-hour predictive accuracy at 94.7%.", nodeType: "wiki" },
-  { id: "encryption",  label: "Encryption",         desc: "AES-256 and quantum-resistant cryptographic protocols on all channels.", nodeType: "wiki" },
+  { id: "jarvis",      label: "JARVIS",            desc: "Core intelligence. Upload documents in the Textbooks tab to build your knowledge graph.", nodeType: "jarvis" },
 ];
 
-let EDGES: GEdge[] = [
-  { source: "jarvis", target: "voice" },
-  { source: "jarvis", target: "neural" },
-  { source: "jarvis", target: "security" },
-  { source: "jarvis", target: "user" },
-  { source: "jarvis", target: "diagnostics" },
-  { source: "jarvis", target: "env" },
-  { source: "neural", target: "memory" },
-  { source: "neural", target: "research" },
-  { source: "neural", target: "voice" },
-  { source: "neural", target: "quantum" },
-  { source: "memory", target: "user" },
-  { source: "memory", target: "research" },
-  { source: "security", target: "encryption" },
-  { source: "security", target: "comms" },
-  { source: "env", target: "quantum" },
-  { source: "env", target: "weather" },
-  { source: "user", target: "calendar" },
-  { source: "user", target: "comms" },
-  { source: "calendar", target: "comms" },
-  { source: "diagnostics", target: "quantum" },
-  { source: "weather", target: "user" },
-  { source: "research", target: "comms" },
-];
+let EDGES: GEdge[] = [];
 
 // ── Subject colour palette ───────────────────────────────────────────────────
 const SUBJECT_COLORS: Record<string, string> = {
@@ -259,7 +223,7 @@ function render(
   });
 }
 
-export function KnowledgeGraph({ ws }: { ws?: WebSocket | null }) {
+export function KnowledgeGraph({ ws, refreshKey }: { ws?: WebSocket | null; refreshKey?: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodesRef = useRef<GNode[]>([]);
@@ -324,17 +288,15 @@ export function KnowledgeGraph({ ws }: { ws?: WebSocket | null }) {
         const { W: cW, H: cH } = dimRef.current;
 
         if (data.type === "ncert_graph_data") {
-          if (data.nodes && data.nodes.length > 1) {
+          if (data.nodes && data.nodes.length > 0) {
             // Mark node types from data
             const typed = data.nodes.map((n: any) => ({
               ...n,
-              nodeType: n.id === "jarvis" ? "jarvis" : n.id.startsWith("subj_") ? "subject" : "chapter",
+              nodeType: n.id === "jarvis" ? "jarvis" : (n.id.startsWith("subj_") || n.id.startsWith("doc_") ? "subject" : "chapter"),
             }));
             applyGraphData(typed, data.edges || [], cW, cH);
             setDataSourceBoth("ncert");
           }
-          // If empty NCERT data, fall through so wiki graph can still display
-          // (don't return early — let graph_data handler below run on next message)
           return;
         }
 
@@ -365,6 +327,7 @@ export function KnowledgeGraph({ ws }: { ws?: WebSocket | null }) {
       } catch {}
     };
 
+    // Trigger data fetch on mount or open
     if (activeWs.readyState === WebSocket.OPEN) {
       onOpen();
     } else {
@@ -372,7 +335,21 @@ export function KnowledgeGraph({ ws }: { ws?: WebSocket | null }) {
     }
     activeWs.addEventListener("message", onMessage);
 
-    // Live loop
+    // Dynamic refetch when index rebuild updates graph key
+    const refetch = () => {
+      if (activeWs.readyState === WebSocket.OPEN) {
+        activeWs.send(JSON.stringify({ type: "get_ncert_graph" }));
+        activeWs.send(JSON.stringify({ type: "get_graph" }));
+      }
+    };
+    refetch(); // Fetch immediately on connection init
+
+    // Set listener on refreshKey trigger
+    const onKeyChange = () => {
+      refetch();
+    };
+
+    // Track frame loop
     const frame = (t: number) => {
       tickForces(nodesRef.current, EDGES, W, H, 0.12);
       render(ctx, nodesRef.current, EDGES, selRef.current, hovRef.current, W, H, t);
@@ -440,31 +417,13 @@ export function KnowledgeGraph({ ws }: { ws?: WebSocket | null }) {
     };
   }, []);
 
-  // React to external ws refresh events (when passed as prop)
+  // React to external index rebuilds via refreshKey prop
   useEffect(() => {
-    if (!ws) return;
-    const handler = (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        const { W, H } = dimRef.current;
-        if (data.type === "refresh_ncert_graph") {
-          ws.send(JSON.stringify({ type: "get_ncert_graph" }));
-        }
-        if (data.type === "ncert_graph_data") {
-          if (data.nodes && data.nodes.length > 1) {
-            const typed = data.nodes.map((n: any) => ({
-              ...n,
-              nodeType: n.id === "jarvis" ? "jarvis" : n.id.startsWith("subj_") ? "subject" : "chapter",
-            }));
-            applyGraphData(typed, data.edges || [], W, H);
-            setDataSourceBoth("ncert");
-          }
-        }
-      } catch {}
-    };
-    ws.addEventListener("message", handler);
-    return () => ws.removeEventListener("message", handler);
-  }, [ws]);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "get_ncert_graph" }));
+      ws.send(JSON.stringify({ type: "get_graph" }));
+    }
+  }, [ws, refreshKey]);
 
   const connCount = selNode
     ? EDGES.filter(e => e.source === selNode.id || e.target === selNode.id).length

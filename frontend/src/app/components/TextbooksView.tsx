@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Upload, FileText, CheckCircle, XCircle, Loader, BookOpen, Hash } from "lucide-react";
+import { Upload, FileText, CheckCircle, XCircle, Loader, BookOpen, Hash, Trash2 } from "lucide-react";
 
 const FONT = "'Plus Jakarta Sans', sans-serif";
 const TEXT = "#757068";
@@ -56,10 +56,19 @@ function ProgressLog({ lines }: { lines: string[] }) {
   );
 }
 
-export function TextbooksView({ ws }: { ws: WebSocket | null }) {
+export function TextbooksView({
+  ws,
+  indexedDocs,
+  setIndexedDocs,
+}: {
+  ws: WebSocket | null;
+  indexedDocs: IndexedDoc[];
+  setIndexedDocs: React.Dispatch<React.SetStateAction<IndexedDoc[]>>;
+}) {
   const [dragOver, setDragOver] = useState(false);
   const [status, setStatus] = useState<UploadStatus>({ phase: "idle" });
-  const [indexedDocs, setIndexedDocs] = useState<IndexedDoc[]>([]);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const connected = ws?.readyState === WebSocket.OPEN;
 
@@ -67,6 +76,13 @@ export function TextbooksView({ ws }: { ws: WebSocket | null }) {
   const fetchIndexedDocs = useCallback(() => {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "get_indexed_docs" }));
+    }
+  }, [ws]);
+
+  const handleDelete = useCallback((source: string) => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      setDeletingDoc(source);
+      ws.send(JSON.stringify({ type: "delete_doc", source }));
     }
   }, [ws]);
 
@@ -129,12 +145,21 @@ export function TextbooksView({ ws }: { ws: WebSocket | null }) {
           setTimeout(() => setStatus({ phase: "idle" }), 5000);
           return;
         }
+
+        if (data.type === "delete_result") {
+          setDeletingDoc(null);
+          setPendingDelete(null);
+          if (!data.success) {
+            setStatus({ phase: "error", message: data.message });
+          }
+          return;
+        }
       } catch {}
     };
 
     ws.addEventListener("message", handler);
     return () => ws.removeEventListener("message", handler);
-  }, [ws, fetchIndexedDocs]);
+  }, [ws, fetchIndexedDocs, setIndexedDocs]);
 
   const processFile = useCallback(
     (file: File) => {
@@ -553,7 +578,66 @@ export function TextbooksView({ ws }: { ws: WebSocket | null }) {
                     </div>
                   </div>
 
-                  <CheckCircle size={13} color="rgba(61,214,140,0.7)" />
+                  {deletingDoc === doc.source ? (
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                    >
+                      <Loader size={13} color={MUTED} />
+                    </motion.div>
+                  ) : pendingDelete === doc.source ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                      <button
+                        onClick={() => handleDelete(doc.source)}
+                        style={{
+                          background: "rgba(230,80,80,0.1)",
+                          border: "none",
+                          borderRadius: 4,
+                          color: "#e05b5b",
+                          fontSize: 10.5,
+                          padding: "3px 8px",
+                          fontFamily: FONT,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Delete
+                      </button>
+                      <button
+                        onClick={() => setPendingDelete(null)}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: MUTED,
+                          fontSize: 10.5,
+                          padding: "3px 6px",
+                          fontFamily: FONT,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setPendingDelete(doc.source)}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "rgba(230,80,80,0.7)",
+                        padding: 6,
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                      title="Delete document"
+                    >
+                      <Trash2 size={13} strokeWidth={2} />
+                    </button>
+                  )}
                 </motion.div>
               ))}
             </div>

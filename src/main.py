@@ -268,6 +268,93 @@ async def ws_handler(websocket):
                             })
                 except Exception as exc:
                     await websocket.send(json.dumps({"type": "index_done", "success": False, "message": str(exc)}))
+            elif data.get("type") == "delete_doc":
+                import os, sys as _sys
+                source_name = data.get("source", "")
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                docs_dir = os.path.join(project_root, "data", "docs")
+                target_path = os.path.join(docs_dir, source_name)
+                # Prevent path traversal
+                if os.path.exists(target_path) and os.path.abspath(target_path).startswith(os.path.abspath(docs_dir)):
+                    try:
+                        os.unlink(target_path)
+                        await websocket.send(json.dumps({
+                            "type": "delete_result",
+                            "success": True,
+                            "message": f"Successfully deleted {source_name}"
+                        }))
+                        # Rebuild index automatically after delete
+                        script = os.path.join(project_root, "scripts", "build_index.py")
+                        out_dir = os.path.join(project_root, "data", "index")
+                        await websocket.send(json.dumps({"type": "index_progress", "message": "Rebuilding index after document deletion..."}))
+                        proc = await asyncio.create_subprocess_exec(
+                            _sys.executable, script,
+                            "--src", docs_dir, "--out", out_dir, "--embed", "minilm",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.STDOUT,
+                            cwd=project_root,
+                        )
+                        async for line in proc.stdout:
+                            msg = line.decode("utf-8", errors="replace").strip()
+                            if msg:
+                                await websocket.send(json.dumps({"type": "index_progress", "message": msg}))
+                        await proc.wait()
+                        success = proc.returncode == 0
+                        await websocket.send(json.dumps({
+                            "type": "index_done", "success": success,
+                            "message": "Index rebuilt successfully after deletion!" if success else "Index rebuild failed after deletion."
+                        }))
+                        await broadcast({"type": "refresh_ncert_graph"})
+                        # Broadcast fresh doc list
+                        try:
+                            import json as _json2
+                            _chunks_p = os.path.join(project_root, "data", "index", "chunks.jsonl")
+                            if os.path.exists(_chunks_p):
+                                _doc_stats: dict = {}
+                                with open(_chunks_p, "r", encoding="utf-8") as _fds:
+                                    for _ln in _fds:
+                                        _ln = _ln.strip()
+                                        if not _ln:
+                                            continue
+                                        _ch = _json2.loads(_ln)
+                                        _src = _ch.get("source") or _ch.get("chapter") or _ch.get("subject") or "Unknown"
+                                        _pg = _ch.get("page", 1)
+                                        if _src not in _doc_stats:
+                                            _doc_stats[_src] = {"source": _src, "chunk_count": 0, "max_page": 0}
+                                        _doc_stats[_src]["chunk_count"] += 1
+                                        if _pg > _doc_stats[_src]["max_page"]:
+                                            _doc_stats[_src]["max_page"] = _pg
+                                _docs_out = [
+                                    {"source": d["source"], "page_count": d["max_page"], "chunk_count": d["chunk_count"]}
+                                    for d in _doc_stats.values()
+                                ]
+                                await broadcast({"type": "indexed_docs", "docs": _docs_out})
+                            else:
+                                await broadcast({"type": "indexed_docs", "docs": []})
+                        except Exception:
+                            pass
+                        # Hot-swap index
+                        if success and "cfg" in _app_state:
+                            try:
+                                new_retrieval = build_retrieval(_app_state["cfg"])
+                                _app_state["retrieval"] = new_retrieval
+                                new_status = _get_index_status(new_retrieval)
+                                _index_status_ref["status"] = new_status
+                                await broadcast({"type": "index_status", **new_status})
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        await websocket.send(json.dumps({
+                            "type": "delete_result",
+                            "success": False,
+                            "message": f"Error deleting: {e}"
+                        }))
+                else:
+                    await websocket.send(json.dumps({
+                        "type": "delete_result",
+                        "success": False,
+                        "message": f"Document not found: {source_name}"
+                    }))
             elif data.get("type") == "get_indexed_docs":
                 # Return a list of all indexed documents with per-doc stats.
                 # Reads chunks.jsonl and aggregates by source name.
@@ -776,8 +863,36 @@ async def _handle_browser_response(
         chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
         prompt_text = build_prompt(text, chunks)
 
+    # Generate and send one-shot "Thinking." voice chunk
+    try:
+        thinking_pcm = await asyncio.to_thread(tts._synthesize_to_pcm, "Thinking.")
+        if thinking_pcm is not None:
+            wav_bytes = _pcm_to_wav_bytes(thinking_pcm, tts.samplerate)
+            audio_b64 = _b64.b64encode(wav_bytes).decode("utf-8")
+            await broadcast({"type": "audio_out", "audio_b64": audio_b64})
+    except Exception as e:
+        print(f"Error generating thinking voice: {e}")
+
+    # Set up terminal thinking spinner
+    import threading, itertools
+    spinner_stop = threading.Event()
+
+    def _run_spinner():
+        import time as _time_pkg, sys as _sys_pkg
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        for f in itertools.cycle(frames):
+            if spinner_stop.is_set():
+                _sys_pkg.stdout.write("\r\033[2K")
+                _sys_pkg.stdout.flush()
+                break
+            _sys_pkg.stdout.write(f"\r  {f}  \033[2mJarvis is thinking…\033[0m")
+            _sys_pkg.stdout.flush()
+            _time_pkg.sleep(0.09)
+
+    spinner_thread = threading.Thread(target=_run_spinner, daemon=True)
+    spinner_thread.start()
+
     t_llm = _time.perf_counter()
-    await broadcast({"type": "state", "state": "speaking"})
     try:
         engine.reset()
     except Exception:
@@ -791,19 +906,27 @@ async def _handle_browser_response(
 
     def _collect_stream():
         nonlocal first_token
-        for chunk in stream:
-            if first_token:
-                ttft_ms = int((_time.perf_counter() - t_llm) * 1000)
-                print(f"\n\033[2m[TTFT: {ttft_ms}ms]\033[0m")
-                first_token = False
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    broadcast({"type": "text", "text": chunk}), loop
-                )
-            except Exception:
-                pass
-            full_text_parts.append(chunk)
-            yield chunk
+        try:
+            for chunk in stream:
+                if first_token:
+                    spinner_stop.set()
+                    ttft_ms = int((_time.perf_counter() - t_llm) * 1000)
+                    print(f"\r\033[2K\033[2m[TTFT: {ttft_ms}ms]\033[0m")
+                    first_token = False
+                    # Now set state to speaking in the browser to hide thinking UI
+                    asyncio.run_coroutine_threadsafe(
+                        broadcast({"type": "state", "state": "speaking"}), loop
+                    )
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        broadcast({"type": "text", "text": chunk}), loop
+                    )
+                except Exception:
+                    pass
+                full_text_parts.append(chunk)
+                yield chunk
+        finally:
+            spinner_stop.set()
 
     print("Jarvis: ", end="", flush=True)
 

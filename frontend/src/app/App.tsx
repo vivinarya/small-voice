@@ -267,19 +267,22 @@ function Controls({
 }
 
 // ─── Speak view ───────────────────────────────────────────────────────────────
+interface Turn {
+  id: string;
+  words: string[];
+  done: boolean;
+}
+
 function SpeakView({ ws }: { ws: WebSocket | null }) {
   const [state, setState] = useState<JarvisState>("idle");
-  const [streamedWords, setStreamedWords] = useState<string[]>([]);
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [micError, setMicError] = useState<string | null>(null);
+  const [silenceHint, setSilenceHint] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [streamedWords]);
+  const silenceCleanupRef = useRef<(() => void) | null>(null);
 
   // ─── Browser-side audio playback queue (for TTS WAV chunks from backend) ─────
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -310,18 +313,38 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
           const s = data.state;
           if (s === "idle") {
             setState("idle");
-            setTimeout(() => setStreamedWords([]), 900);
+            setTurns((prev) => prev.map((t) => ({ ...t, done: true })));
           } else if (s === "listening" || s === "capturing") {
             setState("listening");
-            setStreamedWords([]);
+            setTurns([]);
           } else if (s === "speaking") {
-            setState("processing");
+            setState("speaking");
           } else if (s === "processing") {
             setState("processing");
           }
         } else if (data.type === "text") {
           setState("speaking");
-          if (data.text) setStreamedWords((p) => [...p, data.text]);
+          if (data.text === "") {
+            // Signal from backend to start a new turn
+            setTurns((prev) => {
+              const cleaned = prev.map((t) => ({ ...t, done: true }));
+              return [...cleaned, { id: Math.random().toString(), words: [], done: false }];
+            });
+          } else {
+            setTurns((prev) => {
+              if (prev.length === 0) {
+                return [{ id: Math.random().toString(), words: [data.text], done: false }];
+              }
+              const last = prev[prev.length - 1];
+              if (last.done) {
+                return [...prev, { id: Math.random().toString(), words: [data.text], done: false }];
+              }
+              return [
+                ...prev.slice(0, -1),
+                { ...last, words: [...last.words, data.text] },
+              ];
+            });
+          }
         } else if (data.type === "audio_out") {
           // Decode base64 WAV from backend TTS and play via Web Audio API
           try {
@@ -350,14 +373,26 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
     return () => ws.removeEventListener("message", handler);
   }, [ws, playNextChunk]);
 
+  // Auto-scroll to bottom of conversation transcripts if user is near bottom
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const threshold = 120;
+    const isAtBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+    if (isAtBottom || turns.length === 1) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
+  }, [turns]);
+
   const handleStart = useCallback(async () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     setMicError(null);
+    setTurns([]);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
 
-      // Pick a supported audio format — WebM works in Chrome/Firefox; fallback to default
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm")
@@ -367,11 +402,78 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
       const recorder = new MediaRecorder(stream, recorderOpts);
       mediaRecorderRef.current = recorder;
 
+      // Silence detection using AnalyserNode
+      const audioContext = audioCtxRef.current || new AudioContext();
+      if (!audioCtxRef.current) audioCtxRef.current = audioContext;
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      const sourceNode = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      sourceNode.connect(analyser);
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      let lastSoundTime = Date.now();
+      let isSilent = false;
+      let rafId: number;
+
+      const checkSilence = () => {
+        analyser.getByteTimeDomainData(dataArray);
+        let sumSquares = 0.0;
+        for (let i = 0; i < bufferLength; i++) {
+          const norm = (dataArray[i] - 128) / 128.0;
+          sumSquares += norm * norm;
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        const threshold = 0.012; // RMS silence threshold
+        const now = Date.now();
+
+        if (rms < threshold) {
+          if (!isSilent) {
+            isSilent = true;
+          }
+          const silenceDuration = now - lastSoundTime;
+          if (silenceDuration > 1000) {
+            const remaining = Math.max(0, Math.ceil((3000 - silenceDuration) / 1000));
+            setSilenceHint(`Silent... auto-submitting in ${remaining}s`);
+          }
+          if (silenceDuration >= 3000) {
+            const rec = mediaRecorderRef.current;
+            if (rec && rec.state !== "inactive") {
+              rec.stop();
+              setState("processing");
+            }
+            return;
+          }
+        } else {
+          isSilent = false;
+          lastSoundTime = now;
+          setSilenceHint(null);
+        }
+        rafId = requestAnimationFrame(checkSilence);
+      };
+
+      rafId = requestAnimationFrame(checkSilence);
+
+      silenceCleanupRef.current = () => {
+        cancelAnimationFrame(rafId);
+        try {
+          sourceNode.disconnect();
+        } catch {}
+        setSilenceHint(null);
+      };
+
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       recorder.onstop = async () => {
+        silenceCleanupRef.current?.();
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         const reader = new FileReader();
@@ -393,6 +495,7 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
   }, [ws]);
 
   const handleStop = useCallback(() => {
+    silenceCleanupRef.current?.();
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       recorder.stop();
@@ -402,13 +505,27 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
     }
   }, [ws]);
 
-  const showWords = streamedWords.length > 0 && state !== "idle";
+  const showWords = turns.length > 0 && state !== "idle";
   const showWave = state === "listening";
-  const showHint = state === "idle" && streamedWords.length === 0;
-  const showProcessing = state === "processing" && streamedWords.length === 0;
+  const showHint = state === "idle" && turns.length === 0;
+  const showProcessing = state === "processing";
+
+  // Cycle thinking phrases for variety
+  const [thinkingPhraseIndex, setThinkingPhraseIndex] = useState(0);
+  const thinkingPhrases = ["Thinking...", "Processing...", "Generating..."];
+  useEffect(() => {
+    if (showProcessing) {
+      const interval = setInterval(() => {
+        setThinkingPhraseIndex((p) => (p + 1) % thinkingPhrases.length);
+      }, 1800);
+      return () => clearInterval(interval);
+    } else {
+      setThinkingPhraseIndex(0);
+    }
+  }, [showProcessing]);
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", width: "100%", height: "100%" }}>
       {/* Ambient blob */}
       <motion.div
         style={{
@@ -423,12 +540,15 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
         transition={{ duration: state === "listening" ? 2 : 4, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      <main style={{
-        flex: 1, display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: streamedWords.length > 0 ? "flex-start" : "center",
-        width: "100%", maxWidth: 860, padding: "48px 40px", boxSizing: "border-box",
-        overflowY: "auto", overflowX: "hidden",
-      }}>
+      <main 
+        ref={scrollContainerRef as any}
+        style={{
+          flex: 1, display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: turns.length > 0 ? "flex-start" : "center",
+          width: "100%", maxWidth: 860, padding: "48px 40px", boxSizing: "border-box",
+          overflowY: "auto", overflowX: "hidden",
+        }}
+      >
         <AnimatePresence mode="wait">
           {showWave ? (
             <motion.div key="wave"
@@ -444,31 +564,114 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
               >
                 Listening…
               </motion.span>
+              {silenceHint && (
+                <span style={{ fontSize: 11, fontFamily: FONT, color: "#E0955A" }}>
+                  {silenceHint}
+                </span>
+              )}
             </motion.div>
           ) : showProcessing ? (
-            <motion.div key="dots"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              style={{ display: "flex", gap: 8 }}
+            <motion.div
+              key="thinking-card"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              style={{
+                width: "100%",
+                maxWidth: 420,
+                background: "rgba(255, 255, 255, 0.45)",
+                backdropFilter: "blur(20px)",
+                WebkitBackdropFilter: "blur(20px)",
+                border: "1px solid rgba(255, 255, 255, 0.8)",
+                borderRadius: 24,
+                boxShadow: "0 12px 40px rgba(0, 0, 0, 0.06)",
+                padding: "48px 32px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 28,
+              }}
             >
-              {[0, 1, 2].map((i) => (
-                <motion.div key={i}
-                  style={{ width: 7, height: 7, borderRadius: "50%", background: MUTED }}
-                  animate={{ opacity: [0.25, 1, 0.25], y: [0, -6, 0] }}
-                  transition={{ duration: 0.9, delay: i * 0.22, repeat: Infinity, ease: "easeInOut" }}
+              {/* Pulsing mint ring loading indicator */}
+              <div style={{ position: "relative", width: 64, height: 64 }}>
+                <motion.div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: "50%",
+                    border: `3px solid ${MINT}`,
+                    opacity: 0.15,
+                  }}
+                  animate={{ scale: [1, 1.4, 1], opacity: [0.15, 0, 0.15] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                 />
-              ))}
+                <motion.div
+                  style={{
+                    position: "absolute",
+                    inset: 6,
+                    borderRadius: "50%",
+                    border: `3px solid ${MINT}`,
+                  }}
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                />
+              </div>
+
+              <div style={{ textAlign: "center" }}>
+                <motion.h3
+                  animate={{ opacity: [0.6, 1, 0.6] }}
+                  transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+                  style={{
+                    fontFamily: FONT,
+                    fontSize: 18,
+                    fontWeight: 600,
+                    color: TEXT,
+                    margin: "0 0 8px",
+                  }}
+                >
+                  {thinkingPhrases[thinkingPhraseIndex]}
+                </motion.h3>
+                <p style={{ fontFamily: FONT, fontSize: 13, color: MUTED, margin: 0 }}>
+                  Jarvis is formulating a response
+                </p>
+              </div>
             </motion.div>
           ) : showWords ? (
             <motion.div key="words"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }}
               exit={{ opacity: 0, filter: "blur(10px)" }}
               transition={{ duration: 0.6 }}
-              style={{ width: "100%", textAlign: "center", fontFamily: FONT, fontSize: "clamp(1.55rem, 3.8vw, 3.1rem)", lineHeight: 1.3, color: TEXT, fontWeight: 400, padding: "0 24px", paddingBottom: "80px" }}
+              style={{ width: "100%", display: "flex", flexDirection: "column", gap: 32, padding: "0 24px", paddingBottom: "80px" }}
             >
-              <TextEffect per="word" preset="blur">
-                {streamedWords.join(" ")}
-              </TextEffect>
+              {turns.map((turn, index) => {
+                const isActive = !turn.done && index === turns.length - 1;
+                return (
+                  <div 
+                    key={turn.id} 
+                    style={{
+                      width: "100%",
+                      textAlign: "center",
+                      fontFamily: FONT,
+                      fontSize: "clamp(1.55rem, 3.8vw, 3.1rem)",
+                      lineHeight: 1.3,
+                      color: TEXT,
+                      fontWeight: 400,
+                      opacity: isActive ? 1 : 0.45,
+                      filter: isActive ? "none" : "blur(0.5px)",
+                      transition: "opacity 0.4s, filter 0.4s",
+                    }}
+                  >
+                    {isActive ? (
+                      <TextEffect per="word" preset="blur">
+                        {turn.words.join(" ")}
+                      </TextEffect>
+                    ) : (
+                      <span>{turn.words.join(" ")}</span>
+                    )}
+                  </div>
+                );
+              })}
               <div ref={messagesEndRef} style={{ height: 1 }} />
             </motion.div>
           ) : showHint ? (
@@ -533,6 +736,30 @@ function SpeakView({ ws }: { ws: WebSocket | null }) {
 export default function App() {
   const [view, setView] = useState<AppView>("speak");
   const ws = useSharedWS(getWsUrl());
+  const [indexedDocs, setIndexedDocs] = useState<any[]>([]);
+  const [graphRefreshKey, setGraphRefreshKey] = useState(0);
+
+  // Root WebSocket listener to survive tab changes
+  useEffect(() => {
+    if (!ws) return;
+    const handler = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "indexed_docs") {
+          setIndexedDocs(data.docs ?? []);
+        } else if (data.type === "refresh_ncert_graph") {
+          setGraphRefreshKey((prev) => prev + 1);
+        }
+      } catch {}
+    };
+    ws.addEventListener("message", handler);
+    
+    // Initial fetch of doc list
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "get_indexed_docs" }));
+    }
+    return () => ws.removeEventListener("message", handler);
+  }, [ws]);
 
   return (
     <div
@@ -574,7 +801,7 @@ export default function App() {
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <KnowledgeGraph ws={ws} />
+            <KnowledgeGraph ws={ws} refreshKey={graphRefreshKey} />
           </motion.div>
         ) : (
           <motion.div
