@@ -909,7 +909,7 @@ export default function App() {
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <TextbooksView ws={ws} />
+            <TextbooksView ws={ws} indexedDocs={indexedDocs} setIndexedDocs={setIndexedDocs} />
           </motion.div>
         )}
       </AnimatePresence>
