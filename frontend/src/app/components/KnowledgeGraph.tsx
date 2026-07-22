@@ -30,7 +30,7 @@ interface GEdge {
 
 // ── Default wiki nodes (shown when no NCERT index exists) ────────────────────
 let NODES_RAW: Array<{ id: string; label: string; desc: string; nodeType?: GNode["nodeType"] }> = [
-  { id: "jarvis",      label: "JARVIS",            desc: "Core intelligence. Upload documents in the Textbooks tab to build your knowledge graph.", nodeType: "jarvis" },
+  { id: "jarvis",      label: "BAYMAX",            desc: "Core intelligence. Upload documents in the Textbooks tab to build your knowledge graph.", nodeType: "jarvis" },
 ];
 
 let EDGES: GEdge[] = [];
@@ -304,7 +304,7 @@ export function KnowledgeGraph({ ws, refreshKey }: { ws?: WebSocket | null; refr
           if (data.nodes && data.nodes.length > 0) {
             const typed = data.nodes.map((n: any) => ({ ...n, nodeType: "wiki" as const }));
             if (!typed.find((n: any) => n.id === "jarvis")) {
-              typed.unshift({ id: "jarvis", label: "JARVIS", desc: "Core Intelligence Vault.", nodeType: "jarvis" });
+              typed.unshift({ id: "jarvis", label: "BAYMAX", desc: "Core Intelligence Vault.", nodeType: "jarvis" });
             }
             const wikiedges = typed
               .filter((n: any) => n.id !== "jarvis")

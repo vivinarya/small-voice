@@ -240,7 +240,7 @@ export function TextbooksView({
             letterSpacing: "0.01em",
           }}
         >
-          Upload any PDF — textbooks, notes, manuals, research papers — and Jarvis
+          Upload any PDF — textbooks, notes, manuals, research papers — and Baymax
           will index every page so you can ask questions about it.
         </p>
 

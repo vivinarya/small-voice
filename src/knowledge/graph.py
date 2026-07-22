@@ -20,6 +20,42 @@ def fast_wiki_router(user_speech: str) -> str:
                 # Strip YAML frontmatter if present
                 return re.sub(r'^---.*?---\n', '', content, flags=re.DOTALL).strip()
                 
+    # Keyword-based fallback matching for school context questions (principal, event, robot, etc.)
+    matched_contents = []
+    
+    # Check school keywords
+    if any(kw in user_speech_lower for kw in ["school", "nps", "itpl"]):
+        path = os.path.join(wiki_dir, "nps-itpl.md")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                matched_contents.append(f.read())
+                
+    # Check principal keywords
+    if any(kw in user_speech_lower for kw in ["principal", "roopa", "sridhar", "leadership", "head"]):
+        path = os.path.join(wiki_dir, "roopa-sridhar.md")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                matched_contents.append(f.read())
+                
+    # Check event keywords
+    if any(kw in user_speech_lower for kw in ["event", "expo", "hacknexus", "hack nexus", "divisions", "exhibition"]):
+        path = os.path.join(wiki_dir, "hacknexus.md")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                matched_contents.append(f.read())
+                
+    # Check robot keywords
+    if any(kw in user_speech_lower for kw in ["robot", "reachy", "mini", "assistant", "presentation", "presented"]):
+        path = os.path.join(wiki_dir, "reachy-mini.md")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                matched_contents.append(f.read())
+                
+    if matched_contents:
+        # Combine all matches and strip YAML frontmatters
+        combined = "\n\n".join(matched_contents)
+        return re.sub(r'^---.*?---\n', '', combined, flags=re.DOTALL | re.MULTILINE).strip()
+        
     return ""
 
 def autocorrect_stt(text: str) -> str:

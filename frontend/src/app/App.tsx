@@ -107,7 +107,7 @@ function useSharedWS(url: string) {
 
 // ─── Nav pill ─────────────────────────────────────────────────────────────────
 const NAV_LABELS: Record<AppView, string> = {
-  speak: "Jarvis",
+  speak: "Baymax",
   graph: "Knowledge Graph",
   textbooks: "Textbooks",
 };
@@ -730,7 +730,7 @@ function SpeakView({ ws, wsReady }: { ws: WebSocket | null; wsReady: boolean }) 
                   {thinkingPhrases[thinkingPhraseIndex]}
                 </motion.h3>
                 <p style={{ fontFamily: FONT, fontSize: 13, color: MUTED, margin: 0 }}>
-                  Jarvis is formulating a response
+                  Baymax is formulating a response
                 </p>
               </div>
             </motion.div>
