@@ -897,6 +897,21 @@ def _is_who_are_you_query(text: str) -> bool:
             t = t[len(prefix):].strip().lstrip(",:; ")
     return t in ["who are you", "what is your name", "what are you", "tell me about yourself", "who you are"]
 
+def _requires_live_search(text: str) -> bool:
+    t = text.strip().lower()
+    
+    # Explicit request for internet/search
+    explicit = ["search the internet", "search the web", "search online", "look up online", "google for", "check the internet"]
+    if any(phrase in t for phrase in explicit):
+        return True
+        
+    # Real-time topics that offline textbooks cannot answer
+    real_time_keywords = ["weather", "temperature", "forecast", "latest news", "current affairs", "today's match", "today's score", "time in", "date today"]
+    if any(kw in t for kw in real_time_keywords):
+        return True
+        
+    return False
+
 async def _get_context_chunks(text: str, active_retrieval, wiki_context: str) -> list:
     from retrieval.base import Chunk, RetrievedChunk
     if wiki_context:
@@ -907,10 +922,14 @@ async def _get_context_chunks(text: str, active_retrieval, wiki_context: str) ->
             )
         ]
     
-    chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+    force_web = _requires_live_search(text)
+    chunks = []
+    if not force_web:
+        chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+        
     if not chunks:
         # Do not run web search for simple greetings/chit-chat
-        if _is_conversational_only(text):
+        if not force_web and _is_conversational_only(text):
             return []
             
         # Check internet connection
