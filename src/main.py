@@ -688,7 +688,7 @@ async def main_loop() -> None:
     recorder  = AudioRecorder(samplerate=16000, blocksize=1280)  
     processor = AudioProcessor()
     wakeword  = WakeWordDetector(
-        model_paths=["assets/wakeword_models/hey_jarvis_v0.1.onnx"]
+        model_paths=["assets/wakeword_models/hey_baymax_v0.1.onnx"]
     )
     recorder.start()
 

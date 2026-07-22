@@ -12,7 +12,7 @@ class WakeWordDetector:
                          Defaults to the bundled hey_jarvis ONNX model.
         """
         if model_paths is None:
-            model_paths = ["assets/wakeword_models/hey_jarvis_v0.1.onnx"]
+            model_paths = ["assets/wakeword_models/hey_baymax_v0.1.onnx"]
 
         # Pass file paths directly - openWakeWord will use onnxruntime automatically
         self.oww_model = Model(wakeword_models=model_paths, inference_framework="onnx")
@@ -36,6 +36,6 @@ class WakeWordDetector:
         self.oww_model.predict(audio_chunk)
 
         for name in self.model_names:
-            if self.oww_model.prediction_buffer[name][-1] > 0.08:
+            if self.oww_model.prediction_buffer[name][-1] > 0.2:
                 return True, name
         return False, None
