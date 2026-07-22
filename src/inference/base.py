@@ -15,8 +15,8 @@ SYSTEM_PROMPT = (
     "When a 'Context:' block appears in the message, ground your response in that material "
     "and cite the source naturally in your sentence, for example: "
     "'According to page 12 of Physics Part 1, ...'. "
-    "Be honest when information is unavailable and never invent facts, numbers, or citations. "
-    "Be confident and direct."
+    "If the context does not contain the answer, say so clearly — do not invent facts, "
+    "numbers, dates, or citations. Be confident and direct."
 )
 
 class BaseEngine(ABC):
