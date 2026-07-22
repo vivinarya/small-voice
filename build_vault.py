@@ -45,9 +45,9 @@ last_updated: YYYY-MM-DD
 - [[Connected Page 2]]
 ```''')
 
-w(b+'index.md', '# Index\nWelcome to NPS ITPL Reachy Mini Vault.')
+w(b+'index.md', '# Index\nWelcome to NPS ITPL Baymax Vault.')
 w(b+'log.md', '# Log\n2026-07-20 compiled')
-w(b+'raw/school_info.txt', "National Public School ITPL (NPS ITPL) is hosting HackNexus 2026. The Principal is Mrs. Roopa Sridhar. The founder is Mr. K. G. Garg. Chairman is Dr. K. P. Gopalkrishna. Reachy Mini will be demoed next to the principal's seating area.")
+w(b+'raw/school_info.txt', "National Public School ITPL (NPS ITPL) is hosting HackNexus 2026. The Principal is Mrs. Roopa Sridhar. The founder is Mr. K. G. Garg. Chairman is Dr. K. P. Gopalkrishna. Baymax will be demoed next to the principal's seating area.")
 w(b+'raw/robot_specs.pdf', 'dummy pdf')
 w(b+'raw/schedule.md', '# Schedule')
 
@@ -68,12 +68,12 @@ last_updated: 2026-07-20
 - Address: Goravigere, Kadugodi Main Road, Bengaluru - 560115
 
 ## Context
-NPS ITPL is the proud host of the inaugural [[HackNexus 2026]] expo, where students from across schools showcase technology. The offline AI assistant [[Reachy Mini]] will be stationed actively next to Principal [[Mrs. Roopa Sridhar]]'s designated seating area for live demonstration and interaction.
+NPS ITPL is the proud host of the inaugural [[HackNexus 2026]] expo, where students from across schools showcase technology. The offline AI assistant [[Baymax]] will be stationed actively next to Principal [[Mrs. Roopa Sridhar]]'s designated seating area for live demonstration and interaction.
 
 ## Related Nodes
 - [[HackNexus 2026]]
 - [[Mrs. Roopa Sridhar]]
-- [[Reachy Mini]]''')
+- [[Baymax]]''')
 
 w(b+'wiki/entities/hacknexus.md', '''---
 type: entity
@@ -100,11 +100,11 @@ last_updated: 2026-07-20
 - **TechTurf (Grades 9 - 12)**: Advanced tech application expo
 
 ## Context
-During HackNexus 2026, the offline edge assistant [[Reachy Mini]] is showcased in real-time, helping students and trainers interact with advanced AI without internet dependence.
+During HackNexus 2026, the offline edge assistant [[Baymax]] is showcased in real-time, helping students and trainers interact with advanced AI without internet dependence.
 
 ## Related Nodes
 - [[National Public School ITPL]]
-- [[Reachy Mini]]''')
+- [[Baymax]]''')
 
 w(b+'wiki/entities/roopa-sridhar.md', '''---
 type: entity
@@ -115,23 +115,23 @@ last_updated: 2026-07-20
 **Summary**: The Principal of [[National Public School ITPL]].
 
 ## Context
-Mrs. Roopa Sridhar provides academic and operational leadership for [[National Public School ITPL]]. At the [[HackNexus 2026]] expo, her seating area is situated directly adjacent to the demonstration table for [[Reachy Mini]].
+Mrs. Roopa Sridhar provides academic and operational leadership for [[National Public School ITPL]]. At the [[HackNexus 2026]] expo, her seating area is situated directly adjacent to the demonstration table for [[Baymax]].
 
 ## Related Nodes
 - [[National Public School ITPL]]
-- [[Reachy Mini]]
+- [[Baymax]]
 - [[HackNexus 2026]]''')
 
-w(b+'wiki/entities/reachy-mini.md', '''---
+w(b+'wiki/entities/baymax.md', '''---
 type: entity
 category: Hardware
 last_updated: 2026-07-20
 ---
-# Reachy Mini
-**Summary**: The advanced offline edge-AI interactive robot model featured at [[HackNexus 2026]].
+# Baymax
+**Summary**: The advanced offline edge-AI interactive assistant model featured at [[HackNexus 2026]].
 
 ## Context
-Reachy Mini is the core interactive AI prototype deployed at [[National Public School ITPL]] for the [[HackNexus 2026]] expo. The unit runs 100% offline on a Jetson Orin Nano, and is located directly next to Principal [[Mrs. Roopa Sridhar]]'s seating space.
+Baymax is the core interactive AI prototype deployed at [[National Public School ITPL]] for the [[HackNexus 2026]] expo. The unit runs 100% offline on a Jetson Orin Nano, and is located directly next to Principal [[Mrs. Roopa Sridhar]]'s seating space.
 
 ## Related Nodes
 - [[National Public School ITPL]]

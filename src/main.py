@@ -890,6 +890,13 @@ def _is_conversational_only(text: str) -> bool:
             
     return False
 
+def _is_who_are_you_query(text: str) -> bool:
+    t = text.strip().lower().rstrip(".?!")
+    for prefix in ["hey baymax", "hey b-max", "hey bmax", "baymax", "b-max", "bmax"]:
+        if t.startswith(prefix):
+            t = t[len(prefix):].strip().lstrip(",:; ")
+    return t in ["who are you", "what is your name", "what are you", "tell me about yourself", "who you are"]
+
 async def _get_context_chunks(text: str, active_retrieval, wiki_context: str) -> list:
     from retrieval.base import Chunk, RetrievedChunk
     if wiki_context:
@@ -1046,6 +1053,10 @@ async def _handle_browser_response_inner(
         sources = active_retrieval.list_sources()
     except Exception:
         sources = []
+
+    if _is_who_are_you_query(text):
+        await _speak_browser("Hi, I am Baymax, your personal AI assistant to help you with all your needs.")
+        return
 
     if is_book_list_query(text):
         await _speak_browser(format_book_list(sources))
@@ -1297,6 +1308,9 @@ async def _handle_response(
             pass
         await asyncio.to_thread(tts.speak, answer)
         return answer
+
+    if _is_who_are_you_query(text):
+        return await _speak_answer("Hi, I am Baymax, your personal AI assistant to help you with all your needs.")
 
     # (a) "What books / documents do you have?"
     if is_book_list_query(text):
