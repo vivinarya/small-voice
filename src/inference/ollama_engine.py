@@ -61,7 +61,7 @@ class OllamaEngine(BaseEngine):
                 model=self._model,
                 messages=messages,
                 stream=True,
-                max_tokens=512,      # raised from 256 — Qwen 3B can give fuller answers
+                max_tokens=150,      # voice responses = 1-3 spoken sentences; 512 caused 20s+ gen time
                 temperature=0.3,     # lower = more factual/focused (default is 0.8)
                 top_p=0.9,
             )

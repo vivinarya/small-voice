@@ -43,7 +43,11 @@ def _clean_for_tts(text: str) -> str:
 class PiperTTS(BaseTTS):
     def __init__(self, model_path="assets/piper_voices/en_US-lessac-medium.onnx"):
         self.model_path = model_path
-        self.piper_path = "assets/piper/piper.exe"
+        # Auto-select binary name: piper.exe on Windows, piper on Linux/Jetson
+        import sys as _sys, os as _os
+        _bin = "piper.exe" if _sys.platform == "win32" else "piper"
+        _root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        self.piper_path = _os.path.join(_root, "assets", "piper", _bin)
         self.samplerate = 22050
         # playback_queue is kept for the speak() single-utterance path only
         self.playback_queue = queue.Queue()
