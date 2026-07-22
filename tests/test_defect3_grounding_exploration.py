@@ -36,6 +36,8 @@ import os
 import sys
 import types
 
+import pytest
+
 # --------------------------------------------------------------------------
 # Make `src/` importable (matches the other exploration tests).
 # --------------------------------------------------------------------------
@@ -240,6 +242,11 @@ def test_missing_index_only_signal_is_a_log_warning(tmp_path, caplog):
 # Assertion 2 — System prompt has NO anti-hallucination / context-only guard.
 # EXPECTED OUTCOME ON UNFIXED CODE: PASSES (it confirms the defect).
 # ==========================================================================
+@pytest.mark.xfail(
+    reason="Defect-state snapshot: guard is now present in fixed code (Req 2.10, 2.12). "
+           "This exploration test documents the unfixed state.",
+    strict=False,
+)
 def test_system_prompt_has_no_anti_hallucination_guard():
     """LiteRTEngine system prompt never tells the model to answer only from context.
 
@@ -333,6 +340,11 @@ def test_build_once_gap_running_reference_ignores_new_index(tmp_path, monkeypatc
     assert held_retrieval is not fresh_retrieval
 
 
+@pytest.mark.xfail(
+    reason="Defect-state snapshot: _app_state hot-swap is now implemented in fixed code (Req 1.9). "
+           "This exploration test documents the unfixed build-once structure.",
+    strict=False,
+)
 def test_build_once_gap_is_structural_in_main(tmp_path):
     """Structural proof: build_retrieval is called once at startup and never in
     the rebuild_index handler; retrieval is a local passed into _handle_response.

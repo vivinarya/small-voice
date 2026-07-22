@@ -175,6 +175,11 @@ def _read_whisper_stt_source() -> str:
 # This is the slow / less-accurate openai-whisper path.
 # EXPECTED OUTCOME: PASSES (confirming the unfixed, low-accuracy path is live).
 # ==========================================================================
+@pytest.mark.xfail(
+    reason="Defect-state snapshot: config.yaml now uses faster_whisper (fixed). "
+           "This exploration test documents the unfixed slow-whisper path.",
+    strict=False,
+)
 def test_config_stt_backend_is_whisper_not_faster_whisper():
     """config.yaml must select `stt.backend: whisper` — the unfixed path.
 
@@ -231,6 +236,11 @@ def test_config_stt_model_is_base_en():
 # cover representative NCERT domain terms.
 # EXPECTED OUTCOME: PASSES (confirming the autocorrect net is too sparse).
 # ==========================================================================
+@pytest.mark.xfail(
+    reason="Defect-state snapshot: autocorrect dict expanded to 28 entries for NPS ITPL "
+           "school grounding. Exploration test documents the original sparse 7-entry state.",
+    strict=False,
+)
 def test_autocorrect_dict_has_only_a_handful_of_entries():
     """The corrections dict is still small — school-specific entries + a few NCERT terms.
 
