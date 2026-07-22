@@ -935,8 +935,11 @@ async def _handle_browser_response_inner(
     print(f"\nUser (browser mic): {text}")
     await broadcast({"type": "text", "text": ""})  # clear previous
 
-    from knowledge.graph import autocorrect_stt
-    text = autocorrect_stt(text)
+    try:
+        from knowledge.graph import autocorrect_stt as _autocorrect_stt
+        text = _autocorrect_stt(text)
+    except ImportError:
+        pass  # older graph.py without autocorrect_stt — skip correction
 
     from inference.prompt_builder import build_prompt, build_page_prompt
     from retrieval.query_router import (
@@ -1173,8 +1176,11 @@ async def _handle_response(
     text = await asyncio.to_thread(stt.transcribe, audio_np, initial_prompt=stt_prompt)
     stt_ms = int((time.perf_counter() - t_stt_start) * 1000)
 
-    from knowledge.graph import autocorrect_stt
-    text = autocorrect_stt(text)
+    try:
+        from knowledge.graph import autocorrect_stt as _autocorrect_stt
+        text = _autocorrect_stt(text)
+    except ImportError:
+        pass  # older graph.py without autocorrect_stt — skip correction
 
     if not text:
         return ""
