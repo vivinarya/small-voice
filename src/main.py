@@ -854,6 +854,46 @@ def _pcm_to_wav_bytes(pcm_np: "np.ndarray", samplerate: int = 22050) -> bytes:
     return buf.getvalue()
 
 
+async def _get_context_chunks(text: str, active_retrieval, wiki_context: str) -> list:
+    from retrieval.base import Chunk, RetrievedChunk
+    if wiki_context:
+        return [
+            RetrievedChunk(
+                chunk=Chunk(id="wiki_hit", text=wiki_context, source="Knowledge Vault", page=1),
+                score=1.0
+            )
+        ]
+    
+    chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+    if not chunks:
+        # Check internet connection
+        try:
+            import socket
+            socket.setdefaulttimeout(1.0)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect(("8.8.8.8", 53))
+            s.close()
+            has_internet = True
+        except Exception:
+            has_internet = False
+            
+        if has_internet:
+            try:
+                from knowledge.search import ActiveWebUpdater
+                updater = ActiveWebUpdater()
+                web_context = await asyncio.to_thread(updater.search_and_stage, text)
+                if web_context and not web_context.startswith("Web Search Failed:"):
+                    chunks = [
+                        RetrievedChunk(
+                            chunk=Chunk(id="web_search", text=web_context, source="Live Web Search", page=1),
+                            score=1.0
+                        )
+                    ]
+            except Exception as e:
+                print(f"[Web Search Fallback Error]: {e}", flush=True)
+                
+    return chunks
+
 async def _handle_browser_response(
     audio_np,
     engine: "BaseEngine",
@@ -990,16 +1030,7 @@ async def _handle_browser_response_inner(
     else:
         from knowledge.graph import fast_wiki_router
         wiki_context = fast_wiki_router(text)
-        if wiki_context:
-            from retrieval.base import Chunk, RetrievedChunk
-            chunks = [
-                RetrievedChunk(
-                    chunk=Chunk(id="wiki_hit", text=wiki_context, source="Knowledge Vault", page=1),
-                    score=1.0
-                )
-            ]
-        else:
-            chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+        chunks = await _get_context_chunks(text, active_retrieval, wiki_context)
         prompt_text = build_prompt(text, chunks)
 
     # Generate and send one-shot "Thinking." voice chunk
@@ -1266,17 +1297,7 @@ async def _handle_response(
     else:
         from knowledge.graph import fast_wiki_router
         wiki_context = fast_wiki_router(text)
-        if wiki_context:
-            from retrieval.base import Chunk, RetrievedChunk
-            chunks = [
-                RetrievedChunk(
-                    chunk=Chunk(id="wiki_hit", text=wiki_context, source="Knowledge Vault", page=1),
-                    score=1.0
-                )
-            ]
-        else:
-            # Retrieve relevant context via semantic search.
-            chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
+        chunks = await _get_context_chunks(text, active_retrieval, wiki_context)
         prompt_text = build_prompt(text, chunks)
 
     t_llm_start = time.perf_counter()
