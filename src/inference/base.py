@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Iterator
 
 SYSTEM_PROMPT = (
-    "You are Jarvis, a knowledgeable and articulate voice assistant running on an edge device. "
+    "You are Baymax, a knowledgeable and articulate voice assistant running on an edge device. "
     "Speak clearly and naturally, as if having a conversation — no bullet points, markdown, "
     "asterisks, numbered lists, or special characters ever. "
     "For simple questions or greetings, reply in 1-2 short sentences. "

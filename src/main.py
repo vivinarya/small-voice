@@ -533,7 +533,7 @@ def clear_terminal():
 def draw_header():
     clear_terminal()
     print("=" * 60)
-    print("       J A R V I S   E D G E   V O I C E   A S S I S T A N T")
+    print("       B A Y M A X   E D G E   V O I C E   A S S I S T A N T")
     print("=" * 60)
     print("  [100% Local]  [Privacy First]  [Low-Latency CPU Pipeline]")
     print("-" * 60)
@@ -699,7 +699,7 @@ async def main_loop() -> None:
 
     draw_header()
     print("\n" * 2) 
-    show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
+    show_status(IDLE, "Say 'Baymax' to wake me up.")
 
     state              = IDLE
     buffer: list[bytes] = []
@@ -738,7 +738,7 @@ async def main_loop() -> None:
                 _interrupt()
                 state = IDLE
                 recorder.clear_queue()
-                show_status(IDLE, "Interrupted by UI. Say 'Hey Jarvis' to wake me up.")
+                show_status(IDLE, "Interrupted by UI. Say 'Baymax' to wake me up.")
                 continue
                 
             detected, name = wakeword.check(chunk)
@@ -759,7 +759,7 @@ async def main_loop() -> None:
 
             elif state == LISTENING:
                 if (time.monotonic() - activation_time) > LISTEN_TIMEOUT_S:
-                    show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
+                    show_status(IDLE, "Say 'Baymax' to wake me up.")
                     state = IDLE
                     recorder.clear_queue()
                     continue
@@ -797,11 +797,11 @@ async def main_loop() -> None:
                             nonlocal state, silence_chunks, activation_time, buffer
                             if fut.cancelled():
                                 state = IDLE
-                                show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
+                                show_status(IDLE, "Say 'Baymax' to wake me up.")
                                 return
                             elif fut.exception():
                                 state = IDLE
-                                show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
+                                show_status(IDLE, "Say 'Baymax' to wake me up.")
                                 return
                                 
                             try:
@@ -825,7 +825,7 @@ async def main_loop() -> None:
                                 pass
 
                             state = IDLE
-                            show_status(IDLE, "Say 'Hey Jarvis' to wake me up.")
+                            show_status(IDLE, "Say 'Baymax' to wake me up.")
 
                         response_task.add_done_callback(_on_done)
 
@@ -952,7 +952,7 @@ async def _handle_browser_response_inner(
 
     async def _speak_browser(answer: str) -> None:
         """Synthesize answer and send WAV audio back to all browser clients."""
-        print(f"\nJarvis: {answer}")
+        print(f"\nBaymax: {answer}")
         await broadcast({"type": "text", "text": answer})
         pcm = await asyncio.to_thread(tts._synthesize_to_pcm, answer)
         if pcm is not None:
@@ -1024,7 +1024,7 @@ async def _handle_browser_response_inner(
                 _sys_pkg.stdout.write("\r\033[2K")
                 _sys_pkg.stdout.flush()
                 break
-            _sys_pkg.stdout.write(f"\r  {f}  \033[2mJarvis is thinking…\033[0m")
+            _sys_pkg.stdout.write(f"\r  {f}  \033[2mBaymax is thinking…\033[0m")
             _sys_pkg.stdout.flush()
             _time_pkg.sleep(0.09)
 
@@ -1067,7 +1067,7 @@ async def _handle_browser_response_inner(
         finally:
             spinner_stop.set()
 
-    print("Jarvis: ", end="", flush=True)
+    print("Baymax: ", end="", flush=True)
 
     # Run the sentence-level TTS in a thread, but capture PCM chunks and
     # send them over the WebSocket instead of writing to sounddevice.
@@ -1188,7 +1188,7 @@ async def _handle_response(
     print(f"\nUser: {text}")
 
     if _is_shutdown(text):
-        print("Jarvis: Shutting down. Goodbye.")
+        print("Baymax: Shutting down. Goodbye.")
         await asyncio.to_thread(tts.speak, "Shutting down. Goodbye.")
         shutdown_event.set()
         return "Shutting down."
@@ -1219,7 +1219,7 @@ async def _handle_response(
         _sources = []
 
     async def _speak_answer(answer: str) -> str:
-        print(f"\nJarvis: {answer}")
+        print(f"\nBaymax: {answer}")
         try:
             await broadcast({"type": "text", "text": answer})
         except Exception:
@@ -1256,7 +1256,7 @@ async def _handle_response(
     cached = active_retrieval.cache_get(text)
     if cached:
         show_status(SPEAKING, "Answering from cache...")
-        print(f"\nJarvis: {cached.answer_text}")
+        print(f"\nBaymax: {cached.answer_text}")
         await asyncio.to_thread(tts.speak, cached.answer_text)
         return cached.answer_text
 
@@ -1303,7 +1303,7 @@ async def _handle_response(
                 pass
             yield chunk
 
-    print("Jarvis: ", end="", flush=True)
+    print("Baymax: ", end="", flush=True)
     full_text = await asyncio.to_thread(tts.stream_text, latency_wrapper())
     active_retrieval.cache_put(text, full_text)  # Cache the answer for future instant replay
     total_generation_ms = int((time.perf_counter() - t_llm_start) * 1000)
