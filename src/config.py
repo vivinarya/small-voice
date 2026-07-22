@@ -43,6 +43,9 @@ class AppConfig:
     retrieval_k: int      # 1..5
     min_score: float      # relevance gate for retrieved chunks (cosine similarity, default 0.25)
 
+    robot_enabled: bool = False   # control Reachy Mini robot
+    robot_ip: str = ""            # IP address of the robot Pi Zero
+
 
 def _load_yaml(path: str) -> dict:
     """Load a YAML config file. Returns empty dict if file missing."""
@@ -169,6 +172,17 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     except (TypeError, ValueError):
         raise ValueError("retrieval.min_score must be a float in [0.0, 1.0]")
 
+    # --- Robot ---
+    robot_sect = raw.get("robot", {})
+    robot_enabled = (
+        os.environ.get("ROBOT_ENABLED", "").lower() in ("true", "1", "yes")
+        or robot_sect.get("enabled", False)
+    )
+    robot_ip = (
+        os.environ.get("ROBOT_IP")
+        or robot_sect.get("ip", "")
+    )
+
     cfg = AppConfig(
         engine_backend=engine_backend,
         model_path=model_path,
@@ -182,11 +196,13 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         index_dir=index_dir,
         retrieval_k=retrieval_k,
         min_score=min_score,
+        robot_enabled=robot_enabled,
+        robot_ip=robot_ip,
     )
     _validate(cfg)
     logger.info(
-        "Config loaded: engine=%s stt=%s/%s(%s) tts=%s embed=%s k=%d min_score=%.2f",
-        cfg.engine_backend, cfg.stt_backend, cfg.stt_model, cfg.stt_compute_type,
-        cfg.tts_backend, cfg.embed_backend, cfg.retrieval_k, cfg.min_score,
+        "Config loaded: engine=%s stt=%s/%s tts=%s robot=%s(%s)",
+        cfg.engine_backend, cfg.stt_backend, cfg.stt_model,
+        cfg.tts_backend, cfg.robot_enabled, cfg.robot_ip,
     )
     return cfg

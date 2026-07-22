@@ -23,6 +23,7 @@ _index_status_ref: dict = {}
 # reference after a successful rebuild_index, closing the build-once gap
 # (Req 2.11). Keys: "retrieval" (current RetrievalService), "cfg" (AppConfig).
 _app_state: dict = {}
+robot_controller = None
 
 async def broadcast(message_dict):
     if CONNECTED_CLIENTS:
@@ -671,6 +672,10 @@ async def main_loop() -> None:
     _app_state["engine"] = engine
     _app_state["tts"] = tts
     _app_state["stt"] = stt
+    
+    global robot_controller
+    from audio.robot import RobotController
+    robot_controller = RobotController(ip=cfg.robot_ip, enabled=cfg.robot_enabled)
 
     # Detect index readiness immediately after building retrieval
     _index_status = _get_index_status(retrieval)
@@ -1065,6 +1070,8 @@ async def _handle_browser_response_inner(
             wav_bytes = _pcm_to_wav_bytes(pcm, tts.samplerate)
             audio_b64 = _b64.b64encode(wav_bytes).decode("utf-8")
             await broadcast({"type": "audio_out", "audio_b64": audio_b64})
+            if robot_controller and robot_controller.enabled:
+                await asyncio.to_thread(robot_controller.play_audio, wav_bytes)
         await broadcast({"type": "state", "state": "idle"})
 
     # Special query routing (book awareness / page lookup)
@@ -1398,7 +1405,19 @@ async def _handle_response(
             yield chunk
 
     print("Baymax: ", end="", flush=True)
-    full_text = await asyncio.to_thread(tts.stream_text, latency_wrapper())
+    if robot_controller and robot_controller.enabled:
+        full_text_parts = []
+        for chunk in latency_wrapper():
+            full_text_parts.append(chunk)
+            print(chunk, end="", flush=True)
+        print()
+        full_text = "".join(full_text_parts).strip()
+        pcm = await asyncio.to_thread(tts._synthesize_to_pcm, full_text)
+        if pcm is not None:
+            wav_bytes = _pcm_to_wav_bytes(pcm, tts.samplerate)
+            await asyncio.to_thread(robot_controller.play_audio, wav_bytes)
+    else:
+        full_text = await asyncio.to_thread(tts.stream_text, latency_wrapper())
     active_retrieval.cache_put(text, full_text)  # Cache the answer for future instant replay
     total_generation_ms = int((time.perf_counter() - t_llm_start) * 1000)
     

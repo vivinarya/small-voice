@@ -36,3 +36,7 @@ retrieval:
   index_dir: data/index
   k: 3                                     # top-k chunks to inject (1-5)
   min_score: 0.25                          # relevance gate: chunks below this score are excluded (cosine similarity)
+
+robot:
+  enabled: false
+  ip: ""
