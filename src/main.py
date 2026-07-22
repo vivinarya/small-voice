@@ -854,6 +854,42 @@ def _pcm_to_wav_bytes(pcm_np: "np.ndarray", samplerate: int = 22050) -> bytes:
     return buf.getvalue()
 
 
+def _is_conversational_only(text: str) -> bool:
+    t = text.strip().lower().rstrip(".?!")
+    
+    # Clean out wake words if present at start
+    for prefix in ["hey baymax", "hey b-max", "hey bmax", "baymax", "b-max", "bmax"]:
+        if t.startswith(prefix):
+            t = t[len(prefix):].strip().lstrip(",:; ")
+            
+    if not t:
+        return True
+        
+    greetings = {
+        "hello", "hi", "hey", "greetings", "good morning", "good afternoon",
+        "good evening", "howdy", "yo", "sup", "what's up", "whats up"
+    }
+    if t in greetings:
+        return True
+        
+    chit_chat = [
+        "how are you", "what you up to", "what are you up to",
+        "what are you doing", "who are you", "what is your name", "who made you",
+        "who created you", "what can you do", "help me", "how is it going",
+        "how's it going", "how's life", "nice to meet you", "thank you", "thanks",
+        "goodbye", "bye", "see you", "what's your name", "whats your name"
+    ]
+    if any(chat in t for chat in chit_chat):
+        return True
+        
+    words = t.split()
+    if len(words) <= 2:
+        query_words = {"who", "what", "where", "when", "why", "how", "is", "are", "do", "can"}
+        if not any(w in query_words for w in words):
+            return True
+            
+    return False
+
 async def _get_context_chunks(text: str, active_retrieval, wiki_context: str) -> list:
     from retrieval.base import Chunk, RetrievedChunk
     if wiki_context:
@@ -866,6 +902,10 @@ async def _get_context_chunks(text: str, active_retrieval, wiki_context: str) ->
     
     chunks = await asyncio.to_thread(active_retrieval.retrieve, text, 3)
     if not chunks:
+        # Do not run web search for simple greetings/chit-chat
+        if _is_conversational_only(text):
+            return []
+            
         # Check internet connection
         try:
             import socket
