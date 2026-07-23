@@ -1,6 +1,6 @@
 # Small Voice Assistant: Technical Architecture & Blueprint
 
-This is a **100% offline, privacy-first, low-latency conversational voice assistant** running completely on standard consumer CPUs (e.g., Windows PC, macOS, or Raspberry Pi 5). It coordinates a high-performance local pipeline of **openWakeWord** (trigger word), **OpenAI Whisper** (Speech-to-Text), **Gemma-4 E2B/Gemma-2 2B** inside the C++ optimized **LiteRT-LM** engine (LLM reasoning), and **Piper** (Text-to-Speech).
+This is a **100% offline, privacy-first, low-latency conversational voice assistant** running completely on standard consumer CPUs (e.g., Windows PC, macOS, or Raspberry Pi 5). It coordinates a high-performance local pipeline of **openWakeWord** (trigger word), **OpenAI Whisper** (Speech-to-Text), **qwen 2.5** inside the C++ optimized **LiteRT-LM** engine (LLM reasoning), and **Piper** (Text-to-Speech).
 
 ---
 
