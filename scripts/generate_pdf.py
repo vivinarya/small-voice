@@ -2,7 +2,7 @@
 import os
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 def build_pdf():
@@ -85,8 +85,8 @@ def build_pdf():
     story = []
     
     # Header block
-    story.append(Paragraph("Reachy Mini Integration & Setup Guide", title_style))
-    story.append(Paragraph("<b>Version:</b> 1.0 | <b>Release Date:</b> July 22, 2026", body_style))
+    story.append(Paragraph("Reachy Mini Robot & Baymax Setup Guide", title_style))
+    story.append(Paragraph("<b>Version:</b> 1.1 | <b>Release Date:</b> July 23, 2026", body_style))
     story.append(Paragraph("<b>Author:</b> Antigravity Pair Programmer", body_style))
     story.append(Spacer(1, 15))
     
@@ -100,129 +100,79 @@ def build_pdf():
     story.append(hr)
     story.append(Spacer(1, 15))
     
-    # Section 1
-    story.append(Paragraph("1. System Overview & Architecture", h1_style))
+    # Phase 1
+    story.append(Paragraph("Phase 1: Find the Robot's (Pi Zero 2W) IP Address", h1_style))
     story.append(Paragraph(
-        "This system integrates the offline pluggable edge voice assistant (Baymax) running on the <b>Jetson Orin Nano</b> "
-        "with the physical <b>Reachy Mini robot</b> controlled by a <b>Raspberry Pi Zero 2W</b>. "
-        "The voice assistant features hybrid offline/online LLM inference, local text-to-speech (Piper), speech-to-text (Whisper), "
-        "and local knowledge vault (NCERT textbooks / NPS expo info) grounding with DuckDuckGo fallback.",
+        "Make sure the robot (Pi Zero 2W) and your Jetson Orin Nano are connected to the same local Wi-Fi network.",
         body_style
     ))
     story.append(Paragraph(
-        "<b>Hardware Communication Ports:</b>", body_style
-    ))
-    story.append(Paragraph("• <b>Port 5001 (TCP):</b> Motor Server on Pi Zero (receives joint movement commands and blink configurations).", bullet_style))
-    story.append(Paragraph("• <b>Port 5002 (TCP):</b> Microphone Server on Pi Zero (streams raw 16kHz audio from physical robot mic).", bullet_style))
-    story.append(Paragraph("• <b>Port 5003 (TCP):</b> Speaker Server on Pi Zero (receives raw WAV audio streams to play through robot speakers).", bullet_style))
-    story.append(Paragraph("• <b>Port 5000 (TCP):</b> Camera Server on Pi Zero (streams H264 video feed via rpicam-vid to Jetson).", bullet_style))
-    story.append(Spacer(1, 10))
-    
-    # Section 2
-    story.append(Paragraph("2. Integrated Code Base Changes", h1_style))
-    
-    story.append(Paragraph("A. Robot Codebase (reachy_mini_custom)", h2_style))
-    story.append(Paragraph(
-        "Modified <code>reachy_mini_v6/pi_robot/robot_server.py</code> to execute the <code>rpicam-vid</code> "
-        "camera streaming subprocess automatically in the background in Python when the server starts, eliminating the need to run <code>run.sh</code> manually:",
+        "1. Open a terminal on your Jetson Orin Nano and run:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>ping -c 3 raspberrypi.local</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<i>(If you custom-named the robot, try: <code>ping -c 3 reachy.local</code>)</i><br/>"
+        "2. Copy the IP address printed in the ping response (e.g., <code>192.168.1.45</code>).<br/>"
+        "3. If the ping fails, scan the local network to find the IP:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>arp -a</code>",
         body_style
-    ))
-    
-    code_pi = (
-        "def start_camera_stream():\n"
-        "    def run_camera():\n"
-        "        while True:\n"
-        "            try:\n"
-        "                proc = subprocess.Popen([\n"
-        "                    'rpicam-vid', '-t', '0', '--inline', '--width', '640', '--height', '480',\n"
-        "                    '--framerate', '30', '--codec', 'h264', '--listen', '-o', 'tcp://0.0.0.0:5000'\n"
-        "                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-        "                proc.wait()\n"
-        "            except Exception as e:\n"
-        "                print(f\"Camera stream error/not installed: {e}\")\n"
-        "            time.sleep(0.5)\n"
-        "    threading.Thread(target=run_camera, daemon=True).start()\n\n"
-        "start_camera_stream()"
-    )
-    story.append(Paragraph(code_pi.replace('\n', '<br/>').replace(' ', '&nbsp;'), code_style))
-    
-    story.append(Paragraph("B. Assistant Codebase (small-voice-main)", h2_style))
-    story.append(Paragraph(
-        "• <b>config.yaml & config-orin.yaml:</b> Appended robot configuration parameters:<br/>"
-        "<code>robot:<br/>&nbsp;&nbsp;enabled: false<br/>&nbsp;&nbsp;ip: \"\"</code>",
-        bullet_style
-    ))
-    story.append(Paragraph(
-        "• <b>src/config.py:</b> Added <code>robot_enabled</code> (bool) and <code>robot_ip</code> (str) to AppConfig with default values for backward compatibility.",
-        bullet_style
-    ))
-    story.append(Paragraph(
-        "• <b>src/audio/robot.py (New File):</b> Created `RobotController` that handles socket connections to the Pi Zero. "
-        "It plays synthesized WAV audio on port 5003 and performs natural neck sway motor gestures on port 5001 during speech.",
-        bullet_style
-    ))
-    story.append(Paragraph(
-        "• <b>src/main.py:</b> Integrated `RobotController`. If <code>robot.enabled</code> is set to <code>true</code>, the local audio stream is bypassed and sent directly to the robot speaker server.",
-        bullet_style
-    ))
-    
-    story.append(PageBreak())
-    
-    # Section 3
-    story.append(Paragraph("3. Wake Word Training & Integration", h1_style))
-    story.append(Paragraph(
-        "To replace the old Jarvis wake word with <b>Baymax</b>, a custom classification model was trained and integrated:",
-        body_style
-    ))
-    story.append(Paragraph(
-        "• <b>scripts/train_wakeword.py (New File):</b> Automates training. Synthesizes positive clips ('Hey Baymax', 'Baymax') and negative clips ('Hey Jarvis', 'Alexa', 'Siri', etc.) using your local Piper TTS engine, varies speeds and volume, extracts features, trains a PyTorch Classifier, and exports the final model to ONNX.",
-        bullet_style
-    ))
-    story.append(Paragraph(
-        "• <b>assets/wakeword_models/hey_baymax_v0.1.onnx & .data (New Files):</b> Pre-trained custom ONNX wake word classification model and weight files, generated by the training script.",
-        bullet_style
-    ))
-    story.append(Paragraph(
-        "• <b>src/audio/wakeword.py:</b> Updated default wake word model path to the custom <code>hey_baymax_v0.1.onnx</code> model and set detection sensitivity threshold to <code>0.2</code>.",
-        bullet_style
-    ))
-    story.append(Paragraph(
-        "• <b>src/main.py:</b> Updated local mic loop initializer to load the <code>hey_baymax_v0.1.onnx</code> model.",
-        bullet_style
     ))
     story.append(Spacer(1, 10))
     
-    # Section 4
-    story.append(Paragraph("4. Step-by-Step Setup & Execution Guide", h1_style))
+    # Phase 2
+    story.append(Paragraph("Phase 2: Start the Robot Server (Raspberry Pi Zero 2W)", h1_style))
     story.append(Paragraph(
-        "Follow these steps to run the complete setup from scratch:",
-        body_style
-    ))
-    
-    story.append(Paragraph("Step 1: Start the Robot Server (on the Pi Zero 2W)", h2_style))
-    story.append(Paragraph(
-        "1. SSH into the Pi Zero 2W.<br/>"
-        "2. Navigate to the Pi robot code directory:<br/>"
+        "1. SSH into the Pi Zero 2W using the IP address:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>ssh pi-zero@192.168.1.22</code><br/>"
+        "2. Navigate to the Pi robot server directory:<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;<code>cd /reachy_mini/Reachy_mini_custom/reachy_mini_v6/pi_robot</code><br/>"
-        "3. Start the server:<br/>"
-        "&nbsp;&nbsp;&nbsp;&nbsp;<code>python3 robot_server.py</code>",
+        "3. Start the socket and camera streams:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>python3 robot_server.py</code><br/>"
+        "<i>Keep this terminal window running. This initializes the Motor Server (port 5001), Mic Server (port 5002), Speaker Server (port 5003), and background Camera Stream (port 5000).</i>",
         body_style
     ))
+    story.append(Spacer(1, 10))
     
-    story.append(Paragraph("Step 2: Configure the Assistant (on Jetson Orin Nano / Windows)", h2_style))
+    # Phase 3
+    story.append(Paragraph("Phase 3: Set up the Voice Assistant (Jetson Orin Nano)", h1_style))
     story.append(Paragraph(
-        "1. Open <code>config.yaml</code> (or copy <code>config-orin.yaml</code> to <code>config.yaml</code> on the Jetson).<br/>"
-        "2. Enable the robot connection and enter the Pi Zero's IP address:<br/>"
-        "&nbsp;&nbsp;&nbsp;&nbsp;<code>robot:<br/>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;enabled: true<br/>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ip: \"192.168.1.XX\" # <-- Put your Pi Zero's IP here</code>",
+        "Open a new terminal window on your Jetson Orin Nano.",
         body_style
     ))
-    
-    story.append(Paragraph("Step 3: Run the Main Assistant loop", h2_style))
     story.append(Paragraph(
-        "1. Open a terminal in the <code>small-voice-main</code> directory.<br/>"
-        "2. Activate your virtual environment (e.g. <code>source jarvis-env/bin/activate</code> on Jetson).<br/>"
-        "3. Execute the assistant:<br/>"
-        "&nbsp;&nbsp;&nbsp;&nbsp;<code>python3 src/main.py</code>",
+        "1. Clone the project and configure the environment:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>git clone https://github.com/vivinarya/small-voice.git</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>cd small-voice</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>python3 -m venv jarvis-env</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>source jarvis-env/bin/activate</code><br/>"
+        "2. Install python packages:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>pip install -r requirements-orin.txt</code><br/>"
+        "3. Download local Piper TTS assets:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>mkdir -p assets/piper/ assets/piper_voices/</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>tar -xf piper_arm64.tar.gz</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>cp piper/piper assets/piper/</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>chmod +x assets/piper/piper</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>wget -O assets/piper_voices/en_US-lessac-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>wget -O assets/piper_voices/en_US-lessac-medium.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json</code><br/>"
+        "4. Setup Ollama (Local LLM Engine):<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>curl -fsSL https://ollama.com/install.sh | sh</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>ollama pull qwen2.5:3b</code><br/>"
+        "5. Update config.yaml with the Robot IP:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>cp config-orin.yaml config.yaml</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;Open <code>config.yaml</code> in a text editor (e.g. <code>nano config.yaml</code>) and set:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>robot:</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>&nbsp;&nbsp;enabled: true</code><br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>&nbsp;&nbsp;ip: \"&lt;YOUR_ROBOT_IP&gt;\"</code>",
+        body_style
+    ))
+    story.append(Spacer(1, 10))
+    
+    # Phase 4
+    story.append(Paragraph("Phase 4: Run the Assistant", h1_style))
+    story.append(Paragraph(
+        "1. Start the conversational assistant on the Jetson Orin Nano:<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;<code>python3 src/main.py</code><br/>"
+        "2. Trigger the dialogue by saying **\"Hey Baymax\"** (or **\"Baymax\"**).<br/>"
+        "3. Ask your question. Speech synthesized on the Jetson will play directly from the robot speakers (port 5003), and the robot will perform talking sway sways (port 5001) in real-time.",
         body_style
     ))
     

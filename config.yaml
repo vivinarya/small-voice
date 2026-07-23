@@ -38,5 +38,5 @@ retrieval:
   min_score: 0.25                          # relevance gate: chunks below this score are excluded (cosine similarity)
 
 robot:
-  enabled: false
-  ip: ""
+  enabled: true
+  ip: "192.168.1.22"
