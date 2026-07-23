@@ -1,6 +1,4 @@
-# Small Voice Assistant: Technical Architecture & Blueprint
-
-This is a **100% offline, privacy-first, low-latency conversational voice assistant** running completely on standard consumer CPUs (e.g., Windows PC, macOS, or Raspberry Pi 5). It coordinates a high-performance local pipeline of **openWakeWord** (trigger word), **OpenAI Whisper** (Speech-to-Text), **Gemma-4 E2B/Gemma-2 2B** inside the C++ optimized **LiteRT-LM** engine (LLM reasoning), and **Piper** (Text-to-Speech).
+This is a **100% offline, privacy-first, low-latency conversational voice assistant** running completely on edge devices (e.g. Windows PC, macOS, or Nvidia Jetson Orin Nano). It coordinates a high-performance local pipeline of **openWakeWord** (trigger word), **Faster-Whisper** (Speech-to-Text), local LLM reasoning (using **Ollama Qwen2.5-3B** on Jetson and **Gemma-4 E4B** inside the C++ optimized **LiteRT-LM** engine on Windows), and **Piper** (Text-to-Speech).
 
 ---
 
@@ -163,33 +161,42 @@ Say **"Hey Baymax"** to trigger the conversation!
 
 A `config.yaml` file at the project root controls which backends are active. You can override any value with environment variables without editing the file.
 
-**Default config.yaml layout:**
+**Default config.yaml layout (Windows Dev Mode):**
 ```yaml
-engine_backend: litert_lm        # LLM backend: litert_lm | llama_cpp
-model_path: assets/gemma-4-E4B-it.litertlm
-stt_backend: whisper              # STT backend: whisper
-tts_backend: piper                # TTS backend: piper
+engine:
+  backend: litert                         # litert | llama_cpp | ollama
+  model_path: assets/gemma-4-E4B-it.litertlm
+  n_gpu_layers: 0
+
+stt:
+  backend: faster_whisper                 # whisper | faster_whisper
+  model: small.en
+  compute_type: int8
+
+tts:
+  backend: piper
+  voice_path: assets/piper_voices/en_US-lessac-medium.onnx
 ```
 
 **Environment variable overrides** (take precedence over config.yaml):
 
 | Variable | Purpose | Example |
 | --- | --- | --- |
-| `ENGINE_BACKEND` | Switch LLM runtime | `litert_lm`, `llama_cpp` |
-| `MODEL_PATH` | Path to the model file | `assets/gemma-4-E4B-it.litertlm` |
-| `STT_BACKEND` | Speech-to-text engine | `whisper` |
+| `ENGINE_BACKEND` | Switch LLM runtime | `litert`, `llama_cpp`, `ollama` |
+| `MODEL_PATH` | Path/Name of the model file | `assets/gemma-4-E4B-it.litertlm`, `qwen2.5:3b` |
+| `STT_BACKEND` | Speech-to-text engine | `faster_whisper`, `whisper` |
 | `TTS_BACKEND` | Text-to-speech engine | `piper` |
 
-**Example: switching to an Orin Nano (llama.cpp backend)**
-
+**Example: switching to Jetson Orin Nano configuration (using Ollama)**
+Copy `config-orin.yaml` to `config.yaml`:
 ```bash
-ENGINE_BACKEND=llama_cpp MODEL_PATH=assets/gemma-2b.gguf python src/main.py
+cp config-orin.yaml config.yaml
 ```
-
-Or set them permanently in your `.env` file:
-```
-ENGINE_BACKEND=llama_cpp
-MODEL_PATH=assets/gemma-2b.gguf
+Which configures:
+```yaml
+engine:
+  backend: ollama
+  model_path: qwen2.5:3b
 ```
 
 ### Output Examples & CLI Showcase
