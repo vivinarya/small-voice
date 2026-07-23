@@ -8,11 +8,11 @@
 
 ## Target File Templates
 
-### Entity Template
+## Entity Template
 ```markdown
 ---
 type: entity
-category: [School / Person / Hardware]
+category: [School / Person / Hardware / Event]
 last_updated: YYYY-MM-DD
 ---
 # {Name}
@@ -29,13 +29,3 @@ last_updated: YYYY-MM-DD
 - [[Connected Page 1]]
 - [[Connected Page 2]]
 ```
-
-## 🔄 Continuous Update & Mutation Policy
-
-When a new source file in `raw/` contains updates or changes to existing wiki files:
-
-1. **Preserve and Extend**: NEVER delete old context unless it is factually replaced. Append or modify the section dynamically.
-2. **Handle Contradictions Explicitly**: If new raw info directly contradicts an existing wiki fact, do not silently overwrite it. Log it structurally:
-   - Example: *Note: As of June 2026, the venue was relocated from the Auditorium to the Science Lab.*
-3. **Bump Metadata**: Always update the `last_updated:` string in the YAML frontmatter of every modified page.
-4. **Maintain Link Integrity**: Do not break existing `[[wikilinks]]`. If an entity page moves or is renamed, update every file that points to it.

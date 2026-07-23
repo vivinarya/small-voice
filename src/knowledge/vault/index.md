@@ -1,2 +1,2 @@
 # Index
-Welcome to Reachy Mini Vault.
+Welcome to NPS ITPL Baymax Vault.
