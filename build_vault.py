@@ -7,6 +7,12 @@ def w(p, c):
 
 b = 'src/knowledge/vault/'
 
+# Clean up old entities if they exist
+for old_file in ['wiki/entities/nps-public-school.md', 'wiki/entities/dr-anjali-sharma.md']:
+    old_path = os.path.join(b, old_file)
+    if os.path.exists(old_path):
+        os.remove(old_path)
+
 w(b+'SCHEMA.md', '''# Wiki Compilation Schema for Reachy Mini
 
 ## Conventions
@@ -17,11 +23,11 @@ w(b+'SCHEMA.md', '''# Wiki Compilation Schema for Reachy Mini
 
 ## Target File Templates
 
-### Entity Template
+## Entity Template
 ```markdown
 ---
 type: entity
-category: [School / Person / Hardware]
+category: [School / Person / Hardware / Event]
 last_updated: YYYY-MM-DD
 ---
 # {Name}
@@ -39,71 +45,101 @@ last_updated: YYYY-MM-DD
 - [[Connected Page 2]]
 ```''')
 
-w(b+'index.md', '# Index\nWelcome to Reachy Mini Vault.')
-w(b+'log.md', '# Log\n2026-06-05 compiled')
-w(b+'raw/school_info.txt', "NPS Public School was founded in 1998. The Principal is Dr. Anjali Sharma. The showcase is happening in the Main Auditorium on June 6th. Reachy Mini will be demoed on a table right next to the principal's seating area.")
+w(b+'index.md', '# Index\nWelcome to NPS ITPL Baymax Vault.')
+w(b+'log.md', '# Log\n2026-07-20 compiled')
+w(b+'raw/school_info.txt', "National Public School ITPL (NPS ITPL) is hosting HackNexus 2026. The Principal is Mrs. Roopa Sridhar. The founder is Mr. K. G. Garg. Chairman is Dr. K. P. Gopalkrishna. Baymax will be demoed next to the principal's seating area.")
 w(b+'raw/robot_specs.pdf', 'dummy pdf')
 w(b+'raw/schedule.md', '# Schedule')
 
-w(b+'wiki/entities/nps-public-school.md', '''---
+w(b+'wiki/entities/nps-itpl.md', '''---
 type: entity
 category: School
-last_updated: 2026-06-05
+last_updated: 2026-07-20
 ---
-# NPS Public School
-**Summary**: The school hosting today's interactive robotics exhibition.
+# National Public School ITPL
+**Summary**: National Public School ITPL (NPS ITPL) is a premier educational institution located in Kadugodi, Whitefield, Bangalore, known for hosting [[HackNexus 2026]].
 
 ## Quick Facts
-- Founded: 1998
-- Showcase Location: Main Auditorium
+- Affiliation: CBSE (Affiliation No: 831091, CEEB Code: 084677)
+- Founder: Mr. K. G. Garg
+- Chairman: Dr. K. P. Gopalkrishna
+- Principal: [[Mrs. Roopa Sridhar]]
+- Contact: +91 96061 86999 or info@npsitpl.com
+- Address: Goravigere, Kadugodi Main Road, Bengaluru - 560115
 
 ## Context
-The school is hosting the 2026 hardware showcase. During the event, [[Reachy Mini]] will be stationed actively on a presentation table positioned next to the designated seating area for [[Dr. Anjali Sharma]].''')
+NPS ITPL is the proud host of the inaugural [[HackNexus 2026]] expo, where students from across schools showcase technology. The offline AI assistant [[Baymax]] will be stationed actively next to Principal [[Mrs. Roopa Sridhar]]'s designated seating area for live demonstration and interaction.
 
-w(b+'wiki/entities/dr-anjali-sharma.md', '''---
+## Related Nodes
+- [[HackNexus 2026]]
+- [[Mrs. Roopa Sridhar]]
+- [[Baymax]]''')
+
+w(b+'wiki/entities/hacknexus.md', '''---
+type: entity
+category: Event
+last_updated: 2026-07-20
+---
+# HackNexus 2026
+**Summary**: The inaugural interschool Model, Simulate, Code and Pitch Expo hosted at [[National Public School ITPL]].
+
+## Quick Facts
+- Host Venue: [[National Public School ITPL]]
+- Tagline: Where innovation connects with technology
+- Objective: Cultivate technological excellence, curiosity, and responsible innovation
+- Audience: School students, educators, and trainers
+
+## Event Divisions
+- **Smartscape (Grades 5 - 6)**: Design thinking and model building challenge
+- **Robo Sweep (Grades 5 - 6)**: Clean-up and sweep robotics challenge
+- **RoboCrafter X (Grades 7 - 8)**: Robotics craft and code challenge
+- **SafeHaven Nexus (Grades 7 - 8)**: Safety and disaster simulation challenge
+- **RoboRush (Grades 7 - 8)**: High-speed robotics racing challenge
+- **PyPulse (Grades 9 - 12)**: Python coding and algorithm challenge
+- **Innovatrix (Grades 9 - 12)**: Innovation pitch and entrepreneurship expo
+- **TechTurf (Grades 9 - 12)**: Advanced tech application expo
+
+## Context
+During HackNexus 2026, the offline edge assistant [[Baymax]] is showcased in real-time, helping students and trainers interact with advanced AI without internet dependence.
+
+## Related Nodes
+- [[National Public School ITPL]]
+- [[Baymax]]''')
+
+w(b+'wiki/entities/roopa-sridhar.md', '''---
 type: entity
 category: Person
-last_updated: 2026-06-05
+last_updated: 2026-07-20
 ---
-# Dr. Anjali Sharma
-**Summary**: The Principal of [[NPS Public School]].
+# Mrs. Roopa Sridhar
+**Summary**: The Principal of [[National Public School ITPL]].
 
 ## Context
-Dr. Sharma oversees the academic and operational leadership of the school. At the upcoming robotics showcase in the Main Auditorium, her primary seating area will be located adjacent to the live demonstration table for [[Reachy Mini]].''')
+Mrs. Roopa Sridhar provides academic and operational leadership for [[National Public School ITPL]]. At the [[HackNexus 2026]] expo, her seating area is situated directly adjacent to the demonstration table for [[Baymax]].
 
-w(b+'wiki/entities/reachy-mini.md', '''---
+## Related Nodes
+- [[National Public School ITPL]]
+- [[Baymax]]
+- [[HackNexus 2026]]''')
+
+w(b+'wiki/entities/baymax.md', '''---
 type: entity
 category: Hardware
-last_updated: 2026-06-05
+last_updated: 2026-07-20
 ---
-# Reachy Mini
-**Summary**: The advanced edge-AI interactive robot designed for open-source social robotics.
+# Baymax
+**Summary**: The advanced offline edge-AI interactive assistant model featured at [[HackNexus 2026]].
 
 ## Context
-Reachy Mini is the featured AI prototype being showcased inside the Main Auditorium at [[NPS Public School]]. The physical unit operates completely offline and is situated directly next to [[Dr. Anjali Sharma]]'s seating space for real-time interaction.''')
+Baymax is the core interactive AI prototype deployed at [[National Public School ITPL]] for the [[HackNexus 2026]] expo. The unit runs 100% offline on a Jetson Orin Nano, and is located directly next to Principal [[Mrs. Roopa Sridhar]]'s seating space.
+
+## Related Nodes
+- [[National Public School ITPL]]
+- [[HackNexus 2026]]
+- [[Mrs. Roopa Sridhar]]''')
 
 w(b+'wiki/concepts/edge-ai-inference.md', '# Edge AI')
 w(b+'wiki/concepts/computer-vision.md', '# CV')
 
-w('src/knowledge/graph.py', '''import os
-
-def fast_wiki_router(user_speech: str) -> str:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    wiki_dir = os.path.join(current_dir, "vault", "wiki", "entities")
-    user_speech_lower = user_speech.lower()
-    
-    if not os.path.exists(wiki_dir):
-        return ""
-        
-    # Check if user speech hits a compiled wiki entity
-    for filename in os.listdir(wiki_dir):
-        if not filename.endswith(".md"): continue
-        entity_name = filename.replace(".md", "").replace("-", " ")
-        if entity_name in user_speech_lower:
-            print(f"[Graph Hit]: Found compiled node for '{entity_name}'")
-            with open(os.path.join(wiki_dir, filename), "r", encoding="utf-8") as f:
-                return f.read() # Returns the pre-synthesized markdown directly!
-                
-    return ""''')
 
 print("Vault created successfully!")

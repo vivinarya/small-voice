@@ -16,6 +16,11 @@ interface GNode {
   vx: number;
   vy: number;
   r: number;
+  // NCERT extras
+  klass?: number;
+  subject?: string;
+  chapter?: string;
+  nodeType?: "jarvis" | "subject" | "chapter" | "wiki";
 }
 
 interface GEdge {
@@ -23,47 +28,32 @@ interface GEdge {
   target: string;
 }
 
-let NODES_RAW = [
-  { id: "jarvis",      label: "JARVIS",            desc: "Core intelligence. Orchestrates all subsystems and manages real-time interaction." },
-  { id: "voice",       label: "Voice Recognition", desc: "Real-time voice pattern analysis. Speech-to-intent conversion at 99.2% accuracy." },
-  { id: "neural",      label: "Neural Networks",   desc: "Deep learning inference for reasoning, prediction, and language understanding." },
-  { id: "memory",      label: "Memory Banks",      desc: "Episodic and semantic memory. Full context retained across every session." },
-  { id: "security",    label: "Security",          desc: "Multi-layer threat detection. Zero breaches in 847 operational days." },
-  { id: "env",         label: "Environmental Scan",desc: "Sensor fusion monitoring ambient conditions, spatial awareness, threat vectors." },
-  { id: "quantum",     label: "Quantum Core",      desc: "Quantum co-processor handling parallel computation on complex optimizations." },
-  { id: "user",        label: "User Profile",       desc: "Behavioral model, preferences, and biometric data. Updated continuously." },
-  { id: "calendar",    label: "Scheduling",         desc: "Predictive scheduling engine with conflict resolution and priority balancing." },
-  { id: "research",    label: "Research DB",        desc: "Indexed knowledge base with real-time integration and source verification." },
-  { id: "comms",       label: "Communications",     desc: "Message routing, drafting assistance, and relationship graph management." },
-  { id: "diagnostics", label: "Diagnostics",        desc: "Real-time performance monitoring. All systems currently nominal." },
-  { id: "weather",     label: "Weather",            desc: "Hyperlocal atmospheric modeling. 72-hour predictive accuracy at 94.7%." },
-  { id: "encryption",  label: "Encryption",         desc: "AES-256 and quantum-resistant cryptographic protocols on all channels." },
+// ── Default wiki nodes (shown when no NCERT index exists) ────────────────────
+let NODES_RAW: Array<{ id: string; label: string; desc: string; nodeType?: GNode["nodeType"] }> = [
+  { id: "jarvis",      label: "BAYMAX",            desc: "Core intelligence. Upload documents in the Textbooks tab to build your knowledge graph.", nodeType: "jarvis" },
 ];
 
-let EDGES: GEdge[] = [
-  { source: "jarvis",      target: "voice" },
-  { source: "jarvis",      target: "neural" },
-  { source: "jarvis",      target: "security" },
-  { source: "jarvis",      target: "user" },
-  { source: "jarvis",      target: "diagnostics" },
-  { source: "jarvis",      target: "env" },
-  { source: "neural",      target: "memory" },
-  { source: "neural",      target: "research" },
-  { source: "neural",      target: "voice" },
-  { source: "neural",      target: "quantum" },
-  { source: "memory",      target: "user" },
-  { source: "memory",      target: "research" },
-  { source: "security",    target: "encryption" },
-  { source: "security",    target: "comms" },
-  { source: "env",         target: "quantum" },
-  { source: "env",         target: "weather" },
-  { source: "user",        target: "calendar" },
-  { source: "user",        target: "comms" },
-  { source: "calendar",    target: "comms" },
-  { source: "diagnostics", target: "quantum" },
-  { source: "weather",     target: "user" },
-  { source: "research",    target: "comms" },
-];
+let EDGES: GEdge[] = [];
+
+// ── Subject colour palette ───────────────────────────────────────────────────
+const SUBJECT_COLORS: Record<string, string> = {
+  science:     "#4EB8A0",
+  mathematics: "#7B8FD4",
+  history:     "#D4A050",
+  geography:   "#68B85C",
+  civics:      "#C472B0",
+  economics:   "#E0955A",
+  english:     "#5AACE0",
+  hindi:       "#E07A5A",
+  biology:     "#72C472",
+  chemistry:   "#C4A472",
+  physics:     "#8472C4",
+};
+
+function subjectColor(subject?: string): string {
+  if (!subject) return "rgba(160,152,144,0.68)";
+  return SUBJECT_COLORS[subject.toLowerCase()] ?? "rgba(130,120,110,0.68)";
+}
 
 function countDegrees() {
   const d = new Map<string, number>();
@@ -81,23 +71,23 @@ function buildNodes(W: number, H: number): GNode[] {
     const angle = (i / NODES_RAW.length) * Math.PI * 2 - Math.PI / 2;
     const spread = 155 + (Math.random() - 0.5) * 30;
     const connections = deg.get(d.id) || 1;
+    const isJarvis = d.id === "jarvis";
+    const isSubject = d.nodeType === "subject";
     return {
       ...d,
-      x: d.id === "jarvis" ? cx : cx + Math.cos(angle) * spread,
-      y: d.id === "jarvis" ? cy : cy + Math.sin(angle) * spread,
+      x: isJarvis ? cx : cx + Math.cos(angle) * spread,
+      y: isJarvis ? cy : cy + Math.sin(angle) * spread,
       vx: 0,
       vy: 0,
-      r: d.id === "jarvis" ? 13 : Math.min(4.5 + connections * 1.1, 10),
+      r: isJarvis ? 13 : isSubject ? Math.min(7 + connections * 0.9, 12) : Math.min(4 + connections * 1.0, 9),
     };
   });
 }
 
 function tickForces(nodes: GNode[], edges: GEdge[], W: number, H: number, heat: number) {
   const cx = W / 2, cy = H / 2;
-
   nodes.forEach(n => { n.vx *= 0.87; n.vy *= 0.87; });
 
-  // Repulsion
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i], b = nodes[j];
@@ -106,14 +96,11 @@ function tickForces(nodes: GNode[], edges: GEdge[], W: number, H: number, heat: 
       const d2 = Math.max(dx * dx + dy * dy, 1);
       const d = Math.sqrt(d2);
       const f = (12000 / d2) * heat;
-      a.vx -= (dx / d) * f;
-      a.vy -= (dy / d) * f;
-      b.vx += (dx / d) * f;
-      b.vy += (dy / d) * f;
+      a.vx -= (dx / d) * f; a.vy -= (dy / d) * f;
+      b.vx += (dx / d) * f; b.vy += (dy / d) * f;
     }
   }
 
-  // Spring along edges
   const nMap = new Map(nodes.map(n => [n.id, n]));
   edges.forEach(e => {
     const a = nMap.get(e.source), b = nMap.get(e.target);
@@ -125,13 +112,11 @@ function tickForces(nodes: GNode[], edges: GEdge[], W: number, H: number, heat: 
     b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
   });
 
-  // Center gravity
   nodes.forEach(n => {
     n.vx += (cx - n.x) * 0.016 * heat;
     n.vy += (cy - n.y) * 0.016 * heat;
   });
 
-  // Integrate + bounds
   const pad = 55;
   nodes.forEach(n => {
     n.x = Math.max(pad, Math.min(W - pad, n.x + n.vx));
@@ -150,13 +135,11 @@ function render(
   t: number
 ) {
   ctx.clearRect(0, 0, W, H);
-
   const nMap = new Map(nodes.map(n => [n.id, n]));
-
   const connectedTo = (id: string) =>
     edges.some(e => (e.source === selected && e.target === id) || (e.target === selected && e.source === id));
 
-  // ── Edges ──────────────────────────────────────────────────
+  // Edges
   edges.forEach(e => {
     const a = nMap.get(e.source), b = nMap.get(e.target);
     if (!a || !b) return;
@@ -169,7 +152,7 @@ function render(
     ctx.stroke();
   });
 
-  // ── Nodes ──────────────────────────────────────────────────
+  // Nodes
   nodes.forEach(n => {
     const isSel = n.id === selected;
     const isHov = n.id === hovered;
@@ -180,7 +163,6 @@ function render(
     ctx.save();
     ctx.globalAlpha = dim ? 0.22 : 1;
 
-    // Jarvis pulse ring
     if (n.id === "jarvis") {
       const pulse = Math.sin(t * 0.0025) * 0.5 + 0.5;
       ctx.beginPath();
@@ -195,29 +177,39 @@ function render(
     ctx.beginPath();
     ctx.arc(n.x, n.y, nr, 0, Math.PI * 2);
 
-    if (isSel)                  ctx.fillStyle = MINT;
-    else if (n.id === "jarvis") ctx.fillStyle = "rgba(110,104,98,0.9)";
-    else if (isHov)             ctx.fillStyle = "rgba(100,95,88,0.92)";
-    else if (isConn)            ctx.fillStyle = "rgba(80,130,105,0.68)";
-    else                        ctx.fillStyle = "rgba(160,152,144,0.68)";
+    if (isSel) {
+      ctx.fillStyle = MINT;
+    } else if (n.id === "jarvis") {
+      ctx.fillStyle = "rgba(110,104,98,0.9)";
+    } else if (n.nodeType === "subject") {
+      const c = subjectColor(n.subject);
+      ctx.fillStyle = isHov ? c : c.replace("0.68", "0.55");
+    } else if (n.nodeType === "chapter") {
+      const c = subjectColor(n.subject);
+      ctx.fillStyle = isHov ? c.replace("0.68", "0.85") : c.replace("0.68", "0.38");
+    } else if (isHov) {
+      ctx.fillStyle = "rgba(100,95,88,0.92)";
+    } else if (isConn) {
+      ctx.fillStyle = "rgba(80,130,105,0.68)";
+    } else {
+      ctx.fillStyle = "rgba(160,152,144,0.68)";
+    }
 
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.strokeStyle = "rgba(255,255,255,0.88)";
     ctx.lineWidth = 1.2;
     ctx.stroke();
-
     ctx.restore();
   });
 
-  // ── Labels (second pass so they render on top) ─────────────
+  // Labels
   nodes.forEach(n => {
     const isSel = n.id === selected;
     const isHov = n.id === hovered;
     const isConn = !!selected && connectedTo(n.id);
     const dim = !!selected && !isSel && !isConn;
     const nr = isHov && !isSel ? n.r + 2 : n.r;
-
     const alpha = dim ? 0.06 : isSel ? 0.95 : isHov || isConn ? 0.7 : 0.55;
 
     ctx.save();
@@ -231,7 +223,7 @@ function render(
   });
 }
 
-export function KnowledgeGraph() {
+export function KnowledgeGraph({ ws, refreshKey }: { ws?: WebSocket | null; refreshKey?: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodesRef = useRef<GNode[]>([]);
@@ -241,8 +233,29 @@ export function KnowledgeGraph() {
   const rafRef = useRef<number>(0);
   const dimRef = useRef({ W: 0, H: 0 });
   const wsRef = useRef<WebSocket | null>(null);
+  const dataSourceRef = useRef<"wiki" | "ncert">("wiki");
   const [selNode, setSelNode] = useState<GNode | null>(null);
-  const [forceRender, setForceRender] = useState(0);
+  const [, setForceRender] = useState(0);
+  const [dataSource, setDataSource] = useState<"wiki" | "ncert">("wiki");
+
+  const setDataSourceBoth = (src: "wiki" | "ncert") => {
+    dataSourceRef.current = src;
+    setDataSource(src);
+  };
+
+  const reinitGraph = (W: number, H: number) => {
+    nodesRef.current = buildNodes(W, H);
+    for (let i = 0; i < 260; i++) {
+      tickForces(nodesRef.current, EDGES, W, H, 1 - i / 300);
+    }
+    setForceRender(Date.now());
+  };
+
+  const applyGraphData = (nodes: Array<{ id: string; label: string; desc: string; nodeType?: GNode["nodeType"]; klass?: number; subject?: string; chapter?: string }>, edges: GEdge[], W: number, H: number) => {
+    NODES_RAW = nodes;
+    EDGES = edges;
+    reinitGraph(W, H);
+  };
 
   useEffect(() => {
     const wrap = wrapRef.current!;
@@ -256,36 +269,87 @@ export function KnowledgeGraph() {
     const ctx = canvas.getContext("2d")!;
     ctx.scale(dpr, dpr);
 
-    const reinitGraph = () => {
-      nodesRef.current = buildNodes(W, H);
-      for (let i = 0; i < 260; i++) {
-        tickForces(nodesRef.current, EDGES, W, H, 1 - i / 300);
-      }
-      setForceRender(Date.now());
+    reinitGraph(W, H);
+
+    // Use passed-in ws prop or create own connection
+    const activeWs: WebSocket = ws || new WebSocket("ws://localhost:8765");
+    wsRef.current = activeWs;
+
+    const onOpen = () => {
+      // First try NCERT graph
+      activeWs.send(JSON.stringify({ type: "get_ncert_graph" }));
+      // Also request wiki graph as fallback
+      activeWs.send(JSON.stringify({ type: "get_graph" }));
     };
 
-    reinitGraph();
-
-    // Connect to WebSocket to fetch real nodes
-    wsRef.current = new WebSocket("ws://localhost:8765");
-    wsRef.current.onopen = () => {
-      wsRef.current?.send(JSON.stringify({ type: "get_graph" }));
-    };
-    wsRef.current.onmessage = (e: MessageEvent) => {
+    const onMessage = (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data);
-        if (data.type === "graph_data" && data.nodes && data.nodes.length > 0) {
-           NODES_RAW = data.nodes;
-           if (!NODES_RAW.find(n => n.id === "jarvis")) {
-              NODES_RAW.unshift({ id: "jarvis", label: "JARVIS", desc: "Core Intelligence Vault." });
-           }
-           EDGES = NODES_RAW.filter(n => n.id !== "jarvis").map(n => ({ source: "jarvis", target: n.id }));
-           reinitGraph();
+        const { W: cW, H: cH } = dimRef.current;
+
+        if (data.type === "ncert_graph_data") {
+          if (data.nodes && data.nodes.length > 0) {
+            // Mark node types from data
+            const typed = data.nodes.map((n: any) => ({
+              ...n,
+              nodeType: n.id === "jarvis" ? "jarvis" : (n.id.startsWith("subj_") || n.id.startsWith("doc_") ? "subject" : "chapter"),
+            }));
+            applyGraphData(typed, data.edges || [], cW, cH);
+            setDataSourceBoth("ncert");
+          }
+          return;
         }
-      } catch (err) {}
+
+        if (data.type === "graph_data" && dataSourceRef.current !== "ncert") {
+          if (data.nodes && data.nodes.length > 0) {
+            const typed = data.nodes.map((n: any) => ({ ...n, nodeType: "wiki" as const }));
+            if (!typed.find((n: any) => n.id === "jarvis")) {
+              typed.unshift({ id: "jarvis", label: "BAYMAX", desc: "Core Intelligence Vault.", nodeType: "jarvis" });
+            }
+            const wikiedges = typed
+              .filter((n: any) => n.id !== "jarvis")
+              .map((n: any) => ({ source: "jarvis", target: n.id }));
+            applyGraphData(typed, wikiedges, cW, cH);
+          }
+          return;
+        }
+
+        if (data.type === "refresh_ncert_graph") {
+          activeWs.send(JSON.stringify({ type: "get_ncert_graph" }));
+          return;
+        }
+
+        if (data.type === "update_node") {
+          // Sync selected node desc change
+          const n = nodesRef.current.find(nd => nd.id === data.id);
+          if (n) n.desc = data.content;
+        }
+      } catch {}
     };
 
-    // Live loop
+    // Trigger data fetch on mount or open
+    if (activeWs.readyState === WebSocket.OPEN) {
+      onOpen();
+    } else {
+      activeWs.addEventListener("open", onOpen);
+    }
+    activeWs.addEventListener("message", onMessage);
+
+    // Dynamic refetch when index rebuild updates graph key
+    const refetch = () => {
+      if (activeWs.readyState === WebSocket.OPEN) {
+        activeWs.send(JSON.stringify({ type: "get_ncert_graph" }));
+        activeWs.send(JSON.stringify({ type: "get_graph" }));
+      }
+    };
+    refetch(); // Fetch immediately on connection init
+
+    // Set listener on refreshKey trigger
+    const onKeyChange = () => {
+      refetch();
+    };
+
+    // Track frame loop
     const frame = (t: number) => {
       tickForces(nodesRef.current, EDGES, W, H, 0.12);
       render(ctx, nodesRef.current, EDGES, selRef.current, hovRef.current, W, H, t);
@@ -293,7 +357,7 @@ export function KnowledgeGraph() {
     };
     rafRef.current = requestAnimationFrame(frame);
 
-    // ── Mouse events ──────────────────────────────────────
+    // Mouse events
     const hitTest = (mx: number, my: number) =>
       nodesRef.current.find((n: GNode) => {
         const dx = n.x - mx, dy = n.y - my;
@@ -329,7 +393,7 @@ export function KnowledgeGraph() {
       if (hit) {
         const next = hit.id === selRef.current ? null : hit.id;
         selRef.current = next;
-        setSelNode(next ? hit : null);
+        setSelNode(next ? { ...hit } : null);
       } else {
         selRef.current = null;
         setSelNode(null);
@@ -343,6 +407,9 @@ export function KnowledgeGraph() {
 
     return () => {
       cancelAnimationFrame(rafRef.current);
+      if (!ws) activeWs.close(); // only close if we created it
+      activeWs.removeEventListener("open", onOpen);
+      activeWs.removeEventListener("message", onMessage);
       canvas.removeEventListener("mousemove", onMove);
       canvas.removeEventListener("mousedown", onDown);
       window.removeEventListener("mouseup", onUp);
@@ -350,15 +417,20 @@ export function KnowledgeGraph() {
     };
   }, []);
 
+  // React to external index rebuilds via refreshKey prop
+  useEffect(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "get_ncert_graph" }));
+      ws.send(JSON.stringify({ type: "get_graph" }));
+    }
+  }, [ws, refreshKey]);
+
   const connCount = selNode
     ? EDGES.filter(e => e.source === selNode.id || e.target === selNode.id).length
     : 0;
 
   return (
-    <div
-      ref={wrapRef}
-      style={{ position: "relative", flex: 1, overflow: "hidden", minHeight: 0 }}
-    >
+    <div ref={wrapRef} style={{ position: "relative", flex: 1, overflow: "hidden", minHeight: 0 }}>
       <canvas
         ref={canvasRef}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
@@ -370,20 +442,32 @@ export function KnowledgeGraph() {
         animate={{ opacity: 1 }}
         transition={{ delay: 0.8, duration: 0.7 }}
         style={{
-          position: "absolute",
-          top: 20,
-          left: 0,
-          right: 0,
-          textAlign: "center",
-          fontFamily: FONT,
-          fontSize: 11,
-          color: "rgba(168,160,154,0.55)",
-          pointerEvents: "none",
-          letterSpacing: "0.06em",
+          position: "absolute", top: 20, left: 0, right: 0,
+          textAlign: "center", fontFamily: FONT, fontSize: 11,
+          color: "rgba(168,160,154,0.55)", pointerEvents: "none", letterSpacing: "0.06em",
         }}
       >
         Click a node to explore · Drag to rearrange
       </motion.p>
+
+      {/* Data source badge */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 1.2 }}
+        style={{
+          position: "absolute", top: 20, right: 20,
+          padding: "4px 10px",
+          background: dataSource === "ncert" ? "rgba(61,214,140,0.1)" : "rgba(0,0,0,0.04)",
+          border: `1px solid ${dataSource === "ncert" ? "rgba(61,214,140,0.25)" : "rgba(0,0,0,0.06)"}`,
+          borderRadius: 100,
+          fontFamily: FONT, fontSize: 10, letterSpacing: "0.06em",
+          color: dataSource === "ncert" ? "#3DD68C" : MUTED,
+          pointerEvents: "none",
+        }}
+      >
+        {dataSource === "ncert" ? "NCERT indexed" : "System graph"}
+      </motion.div>
 
       {/* Node count */}
       <motion.p
@@ -391,14 +475,9 @@ export function KnowledgeGraph() {
         animate={{ opacity: 1 }}
         transition={{ delay: 1, duration: 0.7 }}
         style={{
-          position: "absolute",
-          bottom: 24,
-          right: 28,
-          fontFamily: FONT,
-          fontSize: 10,
-          color: "rgba(168,160,154,0.4)",
-          pointerEvents: "none",
-          letterSpacing: "0.05em",
+          position: "absolute", bottom: 24, right: 28,
+          fontFamily: FONT, fontSize: 10, color: "rgba(168,160,154,0.4)",
+          pointerEvents: "none", letterSpacing: "0.05em",
         }}
       >
         {NODES_RAW.length} nodes · {EDGES.length} connections
@@ -414,34 +493,57 @@ export function KnowledgeGraph() {
             exit={{ opacity: 0, y: 10, scale: 0.97 }}
             transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             style={{
-              position: "absolute",
-              bottom: 28,
-              left: 28,
-              maxWidth: 248,
+              position: "absolute", bottom: 28, left: 28, maxWidth: 260,
               padding: "16px 18px",
               background: "rgba(255,255,255,0.62)",
-              backdropFilter: "blur(20px)",
-              WebkitBackdropFilter: "blur(20px)",
+              backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
               border: "1px solid rgba(255,255,255,0.88)",
-              borderRadius: 14,
-              boxShadow: "0 4px 28px rgba(0,0,0,0.07)",
+              borderRadius: 14, boxShadow: "0 4px 28px rgba(0,0,0,0.07)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
-              <div style={{ width: 7, height: 7, borderRadius: "50%", background: MINT, flexShrink: 0 }} />
+              <div style={{
+                width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                background: selNode.nodeType === "subject"
+                  ? subjectColor(selNode.subject)
+                  : selNode.nodeType === "chapter"
+                  ? subjectColor(selNode.subject)
+                  : MINT,
+              }} />
               <p style={{ fontFamily: FONT, fontSize: 12, fontWeight: 600, color: TEXT, margin: 0, letterSpacing: "0.01em" }}>
                 {selNode.label}
               </p>
             </div>
+
+            {/* NCERT badge */}
+            {selNode.nodeType === "subject" || selNode.nodeType === "chapter" ? (
+              <div style={{ marginBottom: 8 }}>
+                <span style={{
+                  fontFamily: FONT, fontSize: 10, color: subjectColor(selNode.subject),
+                  background: subjectColor(selNode.subject).replace("0.68", "0.1").replace("0.55", "0.1"),
+                  padding: "2px 7px", borderRadius: 100,
+                  border: `1px solid ${subjectColor(selNode.subject).replace("0.68", "0.25")}`,
+                }}>
+                  {selNode.nodeType === "subject" ? `Class ${selNode.klass}` : `Class ${selNode.klass} · ${selNode.subject}`}
+                </span>
+              </div>
+            ) : null}
+
             <textarea
               key={selNode.id}
               defaultValue={selNode.desc}
-              style={{ fontFamily: FONT, fontSize: 11, fontWeight: 400, color: MUTED, margin: "0 0 10px", lineHeight: 1.6, width: "100%", minHeight: 120, background: "rgba(0,0,0,0.03)", border: "1px solid rgba(0,0,0,0.08)", borderRadius: 6, padding: "8px", boxSizing: "border-box", resize: "none" }}
-              onBlur={(e: React.FocusEvent<HTMLTextAreaElement>) => {
-                 if (e.target.value !== selNode.desc && wsRef.current && selNode.id !== "jarvis") {
-                    wsRef.current.send(JSON.stringify({ type: "update_node", id: selNode.id, content: e.target.value }));
-                    selNode.desc = e.target.value;
-                 }
+              readOnly={selNode.nodeType === "subject" || selNode.nodeType === "chapter"}
+              style={{
+                fontFamily: FONT, fontSize: 11, fontWeight: 400, color: MUTED,
+                margin: "0 0 10px", lineHeight: 1.6, width: "100%", minHeight: 100,
+                background: "rgba(0,0,0,0.03)", border: "1px solid rgba(0,0,0,0.08)",
+                borderRadius: 6, padding: "8px", boxSizing: "border-box", resize: "none",
+              }}
+              onBlur={(e) => {
+                if (e.target.value !== selNode.desc && wsRef.current && selNode.id !== "jarvis" && selNode.nodeType === "wiki") {
+                  wsRef.current.send(JSON.stringify({ type: "update_node", id: selNode.id, content: e.target.value }));
+                  selNode.desc = e.target.value;
+                }
               }}
             />
             <p style={{ fontFamily: FONT, fontSize: 10, color: "rgba(168,160,154,0.6)", margin: 0, letterSpacing: "0.05em" }}>

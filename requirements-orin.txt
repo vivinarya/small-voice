@@ -1,0 +1,27 @@
+# requirements-orin.txt — Jetson Orin Nano Super 8GB
+#
+# Install AFTER the Jetson-specific wheels are already installed:
+#   1. PyTorch Jetson wheel           (SETUP_ORIN.md Part 4)
+#   2. onnxruntime-gpu Jetson wheel   (SETUP_ORIN.md Part 5)
+#   3. llama-cpp-python CUDA build    (SETUP_ORIN.md Part 6)
+#
+# Then: pip install -r requirements-orin.txt
+#
+# Differences from requirements.txt:
+#   - litert-lm removed (no aarch64 CUDA pip wheel; replaced by llama-cpp-python)
+#   - torch, onnxruntime NOT listed here (installed via Jetson-specific wheels in Parts 4-5)
+#   - llama-cpp-python NOT listed here (built from source with CUDA in Part 6)
+
+numpy
+sounddevice
+openwakeword>=0.5.1
+tqdm
+faster-whisper>=1.0.0
+duckduckgo-search>=6.1.7
+requests>=2.31.0
+websockets>=12.0
+soundfile
+PyYAML>=6.0
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.2
+pypdf>=3.0.0

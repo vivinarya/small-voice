@@ -1,25 +1,39 @@
-import base64
-import io
-import wave
-import litert_lm
+import logging
+from typing import Any, Iterator
 
-# System prompt: keeps responses short so fewer tokens are decoded → faster.
-_SYSTEM_PROMPT = (
-    "You are Jarvis, a fast, helpful voice assistant running on an edge device. "
-    "Always reply in 1-3 short sentences. Never use bullet points, markdown, "
-    "asterisks, or lists. Speak naturally as if in conversation."
-)
+from .base import BaseEngine, SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
+
+# Backward-compat alias — llama_cpp_engine and ollama_engine import this
+_SYSTEM_PROMPT = SYSTEM_PROMPT
 
 
-class GemmaEngine:
-    def __init__(self, model_path: str = "assets/gemma-4-e2b-it.litertlm"):
-        self.engine = litert_lm.Engine(
-            model_path,
-            backend=litert_lm.Backend.CPU,
-        )
-        # Persist conversation for multi-turn context.
-        # Inject system prompt as the first turn so every reply is brief.
-        self.conversation = self.engine.create_conversation()
+class LiteRTEngine(BaseEngine):
+    """LiteRT-LM (CPU) implementation of BaseEngine.
+
+    Wraps litert_lm.Engine and manages a multi-turn conversation, applying the
+    system prompt internally so callers stay backend-neutral.
+    litert_lm is imported lazily so this file loads without error on Jetson
+    (where litert_lm is not installed and the ollama backend is used instead).
+    """
+
+    def __init__(self, model_path: str = "assets/gemma-4-E4B-it.litertlm"):
+        try:
+            import litert_lm as _litert_lm  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "litert-lm is required for LiteRTEngine but is not installed.\n"
+                "On the Jetson Orin, use backend: ollama in config.yaml instead."
+            ) from exc
+        self.model_path = model_path
+        self._engine = _litert_lm.Engine(model_path, backend=_litert_lm.Backend.CPU)
+        self.conversation = self._engine.create_conversation()
+        self._warmup_done: bool = False
+        self._apply_system_prompt()
+
+    def _apply_system_prompt(self) -> None:
+        """Inject the system prompt as the first turn of the conversation."""
         try:
             system_msg = {
                 "role": "system",
@@ -27,32 +41,8 @@ class GemmaEngine:
             }
             self.conversation.send_message(system_msg)
         except Exception:
-            # Some LiteRT-LM builds don't support 'system' role — silently skip.
             pass
 
-    import typing
-    def get_stream(
-        self,
-        audio_data: bytes | None = None,
-        text_data: str | None = None,
-    ) -> typing.Iterator[str]:
-        """Send a user turn and return the assistant's text response."""
-
-        if text_data:
-            message = {
-                "role": "user",
-                "content": [{"type": "text", "text": text_data}],
-            }
-            if hasattr(self.conversation, "send_message_stream"):
-                for chunk in self.conversation.send_message_stream(message):
-                    text_chunk = self._extract_text(chunk)
-                    if text_chunk:
-                        yield text_chunk
-            else:
-                response = self.conversation.send_message(message)
-                yield self._extract_text(response)
-
-    from typing import Any
     @staticmethod
     def _extract_text(response: Any) -> str:
         contents = response.get("content", [])
@@ -64,3 +54,44 @@ class GemmaEngine:
             ]
             return " ".join(texts).strip()
         return str(contents).strip()
+
+    def get_stream(self, prompt: str) -> Iterator[str]:
+        message = {
+            "role": "user",
+            "content": [{"type": "text", "text": prompt}],
+        }
+        if hasattr(self.conversation, "send_message_stream"):
+            yielded = False
+            for chunk in self.conversation.send_message_stream(message):
+                text_chunk = self._extract_text(chunk)
+                if text_chunk:
+                    yielded = True
+                    yield text_chunk
+            if not yielded:
+                yield ""
+        else:
+            response = self.conversation.send_message(message)
+            yield self._extract_text(response)
+
+    def reset(self) -> None:
+        """Clear multi-turn conversation state and re-apply the system prompt."""
+        self.conversation = self._engine.create_conversation()
+        self._apply_system_prompt()
+
+    def warmup(self) -> None:
+        try:
+            for _ in self.get_stream("Hi"):
+                break
+            self.reset()
+            self._warmup_done = True
+            logger.info("LiteRTEngine.warmup() completed successfully.")
+        except Exception as exc:
+            logger.warning("LiteRTEngine.warmup() failed: %s", exc)
+
+    @property
+    def warmup_done(self) -> bool:
+        return self._warmup_done
+
+
+# Backward-compatibility alias
+GemmaEngine = LiteRTEngine

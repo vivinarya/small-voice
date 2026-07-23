@@ -81,7 +81,7 @@ class LocalCompilerClient:
                 
             # Enforce single-file update policy for the showcase
             if "nps" in query.lower() or "school" in query.lower():
-                safe_name = "nps-public-school"
+                safe_name = "nps-itpl"
             else:
                 # Create a slug for the file name based on the markdown title
                 lines = markdown_content.split('\n')

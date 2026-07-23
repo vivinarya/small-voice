@@ -2,10 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Mic, Square } from "lucide-react";
 import { KnowledgeGraph } from "./components/KnowledgeGraph";
+import { TextbooksView } from "./components/TextbooksView";
 import { TextEffect } from "./components/TextEffect";
 
 type JarvisState = "idle" | "listening" | "processing" | "speaking";
-type AppView = "speak" | "graph";
+type AppView = "speak" | "graph" | "textbooks";
 
 const FONT = "'Plus Jakarta Sans', sans-serif";
 const BG = "#eae9e4";
@@ -14,16 +15,103 @@ const MUTED = "#a8a09a";
 const MINT = "#3DD68C";
 const DARK = "#1e1d1b";
 
-const RESPONSES = [
-  "Good evening. All systems are operating at peak efficiency. How may I assist you today?",
-  "Voice pattern recognized. I have already anticipated your three most likely requests.",
-  "Running a complete diagnostic now. Neural pathways online. Quantum core at ninety-eight percent.",
-  "I have analyzed the surrounding environment. No anomalies detected. Awaiting your instruction.",
-  "Encryption protocols are fully engaged. Your session is completely secure. You may proceed.",
-  "Predictive models suggest three optimal courses of action. Shall I walk you through them?",
-];
+// ─── Shared WebSocket hook ─────────────────────────────────────────────────────
+function getWsUrl(): string {
+  // Priority 1: build-time Vite env variable (e.g. VITE_WS_URL set during npm run build)
+  const fromEnv = (import.meta as any).env?.VITE_WS_URL;
+  if (fromEnv) return fromEnv;
+
+  // Priority 2: runtime ?ws= query param (e.g. ?ws=wss://custom.ngrok-free.app)
+  const params = new URLSearchParams(window.location.search);
+  const fromQuery = params.get("ws");
+  if (fromQuery) return fromQuery;
+
+  const { protocol, hostname } = window.location;
+
+  // Local dev: connect directly to the backend on port 8765
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "ws://localhost:8765";
+  }
+
+  // Remote access (e.g. via ngrok free plan):
+  // Both the frontend and WebSocket are served from the same port (8080) behind
+  // a single ngrok tunnel that exposes standard HTTPS/WSS (port 443 externally).
+  // Do NOT append :8080 — ngrok only forwards the standard port.
+  const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProtocol}//${hostname}`;
+}
+
+
+function useSharedWS(url: string) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const [ws, setWs] = useState<WebSocket | null>(null);
+  const [wsReady, setWsReady] = useState(false);
+  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const stopPing = () => {
+      if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; }
+    };
+
+    const startPing = (socket: WebSocket) => {
+      stopPing();
+      // Send a heartbeat every 25s to prevent ngrok from closing idle connections
+      pingRef.current = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 25000);
+    };
+
+    const connect = () => {
+      setWsReady(false);
+      const socket = new WebSocket(url);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        if (!cancelled) {
+          setWs(socket);
+          setWsReady(true);
+          startPing(socket);
+        }
+      };
+
+      socket.onclose = (ev) => {
+        console.warn(`[WS] closed — code=${ev.code} reason='${ev.reason}'`);
+        stopPing();
+        if (!cancelled) {
+          wsRef.current = null;
+          setWs(null);
+          setWsReady(false);
+          setTimeout(connect, 2000);
+        }
+      };
+
+      socket.onerror = (ev) => {
+        console.error("[WS] error", ev);
+      };
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      stopPing();
+      wsRef.current?.close();
+    };
+  }, [url]);
+
+  return { ws, wsReady };
+}
 
 // ─── Nav pill ─────────────────────────────────────────────────────────────────
+const NAV_LABELS: Record<AppView, string> = {
+  speak: "Baymax",
+  graph: "Knowledge Graph",
+  textbooks: "Textbooks",
+};
+
 function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => void }) {
   return (
     <motion.div
@@ -42,7 +130,7 @@ function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => 
         position: "relative",
       }}
     >
-      {(["speak", "graph"] as AppView[]).map((v) => {
+      {(["speak", "graph", "textbooks"] as AppView[]).map((v) => {
         const active = view === v;
         return (
           <motion.button
@@ -62,7 +150,7 @@ function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => 
               letterSpacing: "0.015em",
               outline: "none",
               zIndex: 1,
-              transition: "color 0.25s ease, font-weight 0.25s ease",
+              transition: "color 0.25s ease",
             }}
           >
             {active && (
@@ -78,15 +166,13 @@ function NavPill({ view, onChange }: { view: AppView; onChange: (v: AppView) => 
                 transition={{ type: "spring", stiffness: 380, damping: 30 }}
               />
             )}
-            {v === "speak" ? "Jarvis" : "Knowledge Graph"}
+            {NAV_LABELS[v]}
           </motion.button>
         );
       })}
     </motion.div>
   );
 }
-
-// Removed StreamedText in favor of TextEffect
 
 // ─── Audio waveform bars ──────────────────────────────────────────────────────
 function AudioWave() {
@@ -122,43 +208,59 @@ function Controls({
   state,
   onStart,
   onStop,
+  wsReady,
 }: {
   state: JarvisState;
   onStart: () => void;
   onStop: () => void;
+  wsReady: boolean;
 }) {
   const isListening = state === "listening";
   const isIdle = state === "idle";
-  const isBusy = state === "processing" || state === "speaking";
+  const isProcessing = state === "processing";
+  const isSpeaking = state === "speaking";
+  const isBusy = isProcessing || isSpeaking;
+  // Fully interactive only when WS is open and not busy
+  const canStart = wsReady && isIdle;
+
+  const handleMainPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    if (canStart) onStart();
+  };
+
+  const handleStopPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    onStop();
+  };
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <AnimatePresence>
-        {isListening && (
+        {(isListening || isProcessing) && (
           <motion.button
             key="stop"
             initial={{ opacity: 0, scale: 0.85, x: 14 }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
             exit={{ opacity: 0, scale: 0.85, x: 14 }}
             transition={{ type: "spring", stiffness: 380, damping: 28 }}
-            onClick={onStop}
+            onPointerDown={handleStopPointerDown}
             style={{
               display: "flex", alignItems: "center", gap: 9,
               padding: "15px 26px",
               background: DARK, border: "none", borderRadius: 100,
-              cursor: "pointer", outline: "none",
+              cursor: "pointer", outline: "none", touchAction: "none",
             }}
           >
             <Square size={13} color="rgba(255,255,255,0.65)" strokeWidth={2.5} fill="rgba(255,255,255,0.65)" />
             <span style={{ fontFamily: FONT, fontSize: 13, fontWeight: 500, color: "rgba(255,255,255,0.65)", letterSpacing: "0.015em" }}>
-              Stop
+              {isProcessing ? "Cancel" : "Stop"}
             </span>
           </motion.button>
         )}
       </AnimatePresence>
 
       <motion.button
-        onClick={isIdle ? onStart : undefined}
+        onPointerDown={handleMainPointerDown}
         disabled={isBusy}
         style={{
           display: "flex", alignItems: "center", gap: 11,
@@ -168,21 +270,23 @@ function Controls({
           WebkitBackdropFilter: "blur(18px)",
           border: isListening ? "1px solid rgba(61,214,140,0.35)" : "1px solid rgba(255,255,255,0.85)",
           borderRadius: 100,
-          cursor: isBusy ? "default" : isListening ? "default" : "pointer",
+          cursor: isBusy ? "default" : canStart ? "pointer" : "not-allowed",
           boxShadow: isListening
             ? "0 6px 32px rgba(61,214,140,0.22), 0 1px 4px rgba(0,0,0,0.06)"
             : "0 4px 28px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04)",
           outline: "none",
           position: "relative",
           overflow: "hidden",
+          touchAction: "none",
+          opacity: !wsReady && isIdle ? 0.65 : 1,
         }}
-        whileHover={isIdle ? { scale: 1.025, transition: { type: "spring", stiffness: 400, damping: 20 } } : {}}
-        whileTap={isIdle ? { scale: 0.96 } : {}}
+        whileHover={canStart ? { scale: 1.025, transition: { type: "spring", stiffness: 400, damping: 20 } } : {}}
+        whileTap={canStart ? { scale: 0.96 } : {}}
         animate={isListening ? { scale: [1, 1.018, 1] } : { scale: 1 }}
         transition={isListening ? { duration: 2.4, repeat: Infinity, ease: "easeInOut" } : { type: "spring", stiffness: 300, damping: 24 }}
       >
         <AnimatePresence>
-          {state === "processing" && (
+          {isProcessing && (
             <motion.div
               key="overlay"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -201,18 +305,29 @@ function Controls({
           )}
         </AnimatePresence>
 
+        {/* WS connection dot */}
+        <motion.div
+          style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: wsReady ? MINT : "#E08080",
+            flexShrink: 0,
+          }}
+          animate={wsReady ? {} : { opacity: [1, 0.3, 1] }}
+          transition={{ duration: 1, repeat: Infinity }}
+        />
+
         <motion.div animate={{ scale: isListening ? [1, 1.12, 1] : 1 }} transition={isListening ? { duration: 1.6, repeat: Infinity } : {}}>
           <Mic size={15} strokeWidth={2.2} color={isListening ? DARK : TEXT} />
         </motion.div>
 
         <AnimatePresence mode="wait">
           <motion.span
-            key={state}
+            key={wsReady ? state : "connecting"}
             initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }}
             transition={{ duration: 0.18 }}
             style={{ fontFamily: FONT, fontSize: 13.5, fontWeight: 500, color: isListening ? DARK : TEXT, letterSpacing: "0.012em", whiteSpace: "nowrap" }}
           >
-            {isIdle ? "Tap to speak" : isListening ? "Listening…" : state === "processing" ? "Processing…" : "Speaking"}
+            {!wsReady && isIdle ? "Connecting…" : isIdle ? "Tap to speak" : isListening ? "Listening…" : isProcessing ? "Processing…" : "Speaking"}
           </motion.span>
         </AnimatePresence>
       </motion.button>
@@ -221,68 +336,293 @@ function Controls({
 }
 
 // ─── Speak view ───────────────────────────────────────────────────────────────
-function SpeakView() {
+interface Turn {
+  id: string;
+  words: string[];
+  done: boolean;
+}
+
+function SpeakView({ ws, wsReady }: { ws: WebSocket | null; wsReady: boolean }) {
   const [state, setState] = useState<JarvisState>("idle");
-  const [streamedWords, setStreamedWords] = useState<string[]>([]);
-  const ws = useRef<WebSocket | null>(null);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [silenceHint, setSilenceHint] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const silenceCleanupRef = useRef<(() => void) | null>(null);
+  // Safety timeout: if stuck in "processing" for >30s, auto-reset to idle
+  const processingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+  // ─── Browser-side audio playback queue (for TTS WAV chunks from backend) ─────
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioQueueRef = useRef<AudioBuffer[]>([]);
+  const isPlayingRef = useRef(false);
+
+  const playNextChunk = useCallback(() => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingRef.current = false;
+      return;
     }
-  }, [streamedWords]);
+    isPlayingRef.current = true;
+    const ctx = audioCtxRef.current!;
+    const buf = audioQueueRef.current.shift()!;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.onended = playNextChunk;
+    src.start();
+  }, []);
 
   useEffect(() => {
-    const connect = () => {
-      ws.current = new WebSocket("ws://localhost:8765");
-      ws.current.onmessage = (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.type === "state") {
-            const s = data.state;
-            if (s === "idle") {
+    if (!ws) return;
+    const handler = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "state") {
+          const s = data.state;
+          if (s === "idle") {
+            setState("idle");
+            setTurns((prev) => prev.map((t) => ({ ...t, done: true })));
+            if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
+          } else if (s === "listening" || s === "capturing") {
+            setState("listening");
+            setTurns([]);
+            if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
+          } else if (s === "speaking") {
+            setState("speaking");
+            if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
+          } else if (s === "processing") {
+            setState("processing");
+            // Auto-reset after 30s if backend never responds
+            if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+            processingTimeoutRef.current = setTimeout(() => {
               setState("idle");
-              setTimeout(() => setStreamedWords([]), 900);
-            } else if (s === "listening" || s === "capturing") {
-              setState("listening");
-              setStreamedWords([]);
-            } else if (s === "speaking") {
-              // We set "processing" until text arrives, then the UI handles words
+              processingTimeoutRef.current = null;
+            }, 30000);
+          }
+        } else if (data.type === "text") {
+          setState("speaking");
+          if (data.text === "") {
+            // Signal from backend to start a new turn
+            setTurns((prev) => {
+              const cleaned = prev.map((t) => ({ ...t, done: true }));
+              return [...cleaned, { id: Math.random().toString(), words: [], done: false }];
+            });
+          } else {
+            setTurns((prev) => {
+              if (prev.length === 0) {
+                return [{ id: Math.random().toString(), words: [data.text], done: false }];
+              }
+              const last = prev[prev.length - 1];
+              if (last.done) {
+                return [...prev, { id: Math.random().toString(), words: [data.text], done: false }];
+              }
+              return [
+                ...prev.slice(0, -1),
+                { ...last, words: [...last.words, data.text] },
+              ];
+            });
+          }
+        } else if (data.type === "audio_out") {
+          // Decode base64 WAV from backend TTS and play via Web Audio API
+          try {
+            if (!audioCtxRef.current) {
+              audioCtxRef.current = new AudioContext();
+            }
+            const ctx = audioCtxRef.current;
+            const raw = atob(data.audio_b64);
+            const bytes = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+            ctx.decodeAudioData(bytes.buffer, (decoded) => {
+              audioQueueRef.current.push(decoded);
+              if (!isPlayingRef.current) playNextChunk();
+            });
+          } catch (audioErr) {
+            console.warn("audio_out decode error:", audioErr);
+          }
+        } else if (data.type === "error") {
+          setState("idle");
+          setMicError(data.message || "Error");
+          setTimeout(() => setMicError(null), 4000);
+        }
+      } catch {}
+    };
+    ws.addEventListener("message", handler);
+    return () => ws.removeEventListener("message", handler);
+  }, [ws, playNextChunk]);
+
+  // Auto-scroll to bottom of conversation transcripts if user is near bottom
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const threshold = 120;
+    const isAtBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+    if (isAtBottom || turns.length === 1) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
+  }, [turns]);
+
+  const handleStart = useCallback(async () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    setMicError(null);
+    setTurns([]);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      const recorderOpts = mimeType ? { mimeType } : {};
+      const recorder = new MediaRecorder(stream, recorderOpts);
+      mediaRecorderRef.current = recorder;
+
+      // Silence detection using AnalyserNode
+      const audioContext = audioCtxRef.current || new AudioContext();
+      if (!audioCtxRef.current) audioCtxRef.current = audioContext;
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      const sourceNode = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      sourceNode.connect(analyser);
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      let lastSoundTime = Date.now();
+      let isSilent = false;
+      let hasSpeech = false; // only start silence countdown after user actually speaks
+      let rafId: number;
+
+      const checkSilence = () => {
+        analyser.getByteTimeDomainData(dataArray);
+        let sumSquares = 0.0;
+        for (let i = 0; i < bufferLength; i++) {
+          const norm = (dataArray[i] - 128) / 128.0;
+          sumSquares += norm * norm;
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        const threshold = 0.012;
+        const now = Date.now();
+
+        if (rms >= threshold) {
+          // Speech detected
+          hasSpeech = true;
+          isSilent = false;
+          lastSoundTime = now;
+          setSilenceHint(null);
+        } else {
+          // Silence — only start countdown if speech was already heard
+          if (!hasSpeech) {
+            rafId = requestAnimationFrame(checkSilence);
+            return;
+          }
+          if (!isSilent) isSilent = true;
+          const silenceDuration = now - lastSoundTime;
+          if (silenceDuration > 1000) {
+            const remaining = Math.max(0, Math.ceil((3000 - silenceDuration) / 1000));
+            setSilenceHint(`Silent… auto-submitting in ${remaining}s`);
+          }
+          if (silenceDuration >= 3000) {
+            const rec = mediaRecorderRef.current;
+            if (rec && rec.state !== "inactive") {
+              rec.stop();
               setState("processing");
             }
-          } else if (data.type === "text") {
-             setState("speaking");
-             if (data.text) setStreamedWords((p: string[]) => [...p, data.text]);
+            return;
           }
-        } catch (err) {}
+        }
+        rafId = requestAnimationFrame(checkSilence);
       };
-      ws.current.onclose = () => {
-        setTimeout(connect, 2000);
-      };
-    };
-    connect();
-    return () => ws.current?.close();
-  }, []);
 
-  const handleStart = useCallback(() => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-       ws.current.send(JSON.stringify({ type: "start_listening" }));
+      rafId = requestAnimationFrame(checkSilence);
+
+      silenceCleanupRef.current = () => {
+        cancelAnimationFrame(rafId);
+        try {
+          sourceNode.disconnect();
+        } catch {}
+        setSilenceHint(null);
+      };
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        silenceCleanupRef.current?.();
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const reader = new FileReader();
+        reader.onload = () => {
+          const b64 = (reader.result as string).split(",")[1];
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "browser_audio", audio_b64: b64 }));
+          }
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      recorder.start();
+      setState("listening");
+    } catch (err) {
+      setMicError("Microphone access denied. Please allow mic access in your browser.");
+      setTimeout(() => setMicError(null), 5000);
     }
-  }, []);
+  }, [ws]);
+
   const handleStop = useCallback(() => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-       ws.current.send(JSON.stringify({ type: "stop_listening" }));
+    silenceCleanupRef.current?.();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      setState("processing");
+      // Safety timeout in case backend never replies
+      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = setTimeout(() => {
+        setState("idle");
+        processingTimeoutRef.current = null;
+      }, 30000);
+    } else {
+      // Already idle or in processing — just reset to idle (Cancel action)
+      setState("idle");
+      if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "stop_listening" }));
+      }
     }
-  }, []);
+  }, [ws]);
 
-  const showWords = streamedWords.length > 0 && state !== "idle";
+  const showWords = turns.length > 0 && state !== "idle";
   const showWave = state === "listening";
-  const showHint = state === "idle" && streamedWords.length === 0;
-  const showProcessing = state === "processing" && streamedWords.length === 0;
+  const showHint = state === "idle" && turns.length === 0;
+  const showProcessing = state === "processing";
+
+  // Cycle thinking phrases for variety
+  const [thinkingPhraseIndex, setThinkingPhraseIndex] = useState(0);
+  const thinkingPhrases = ["Thinking...", "Processing...", "Generating..."];
+  useEffect(() => {
+    if (showProcessing) {
+      const interval = setInterval(() => {
+        setThinkingPhraseIndex((p) => (p + 1) % thinkingPhrases.length);
+      }, 1800);
+      return () => clearInterval(interval);
+    } else {
+      setThinkingPhraseIndex(0);
+    }
+  }, [showProcessing]);
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", width: "100%", height: "100%" }}>
       {/* Ambient blob */}
       <motion.div
         style={{
@@ -297,13 +637,15 @@ function SpeakView() {
         transition={{ duration: state === "listening" ? 2 : 4, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      {/* Text center area */}
-      <main style={{
-        flex: 1, display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: streamedWords.length > 0 ? "flex-start" : "center",
-        width: "100%", maxWidth: 860, padding: "48px 40px", boxSizing: "border-box",
-        overflowY: "auto", overflowX: "hidden",
-      }}>
+      <main 
+        ref={scrollContainerRef as any}
+        style={{
+          flex: 1, display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: turns.length > 0 ? "flex-start" : "center",
+          width: "100%", maxWidth: 860, padding: "48px 40px", boxSizing: "border-box",
+          overflowY: "auto", overflowX: "hidden",
+        }}
+      >
         <AnimatePresence mode="wait">
           {showWave ? (
             <motion.div key="wave"
@@ -319,31 +661,114 @@ function SpeakView() {
               >
                 Listening…
               </motion.span>
+              {silenceHint && (
+                <span style={{ fontSize: 11, fontFamily: FONT, color: "#E0955A" }}>
+                  {silenceHint}
+                </span>
+              )}
             </motion.div>
           ) : showProcessing ? (
-            <motion.div key="dots"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              style={{ display: "flex", gap: 8 }}
+            <motion.div
+              key="thinking-card"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              style={{
+                width: "100%",
+                maxWidth: 420,
+                background: "rgba(255, 255, 255, 0.45)",
+                backdropFilter: "blur(20px)",
+                WebkitBackdropFilter: "blur(20px)",
+                border: "1px solid rgba(255, 255, 255, 0.8)",
+                borderRadius: 24,
+                boxShadow: "0 12px 40px rgba(0, 0, 0, 0.06)",
+                padding: "48px 32px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 28,
+              }}
             >
-              {[0, 1, 2].map((i) => (
-                <motion.div key={i}
-                  style={{ width: 7, height: 7, borderRadius: "50%", background: MUTED }}
-                  animate={{ opacity: [0.25, 1, 0.25], y: [0, -6, 0] }}
-                  transition={{ duration: 0.9, delay: i * 0.22, repeat: Infinity, ease: "easeInOut" }}
+              {/* Pulsing mint ring loading indicator */}
+              <div style={{ position: "relative", width: 64, height: 64 }}>
+                <motion.div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: "50%",
+                    border: `3px solid ${MINT}`,
+                    opacity: 0.15,
+                  }}
+                  animate={{ scale: [1, 1.4, 1], opacity: [0.15, 0, 0.15] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                 />
-              ))}
+                <motion.div
+                  style={{
+                    position: "absolute",
+                    inset: 6,
+                    borderRadius: "50%",
+                    border: `3px solid ${MINT}`,
+                  }}
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                />
+              </div>
+
+              <div style={{ textAlign: "center" }}>
+                <motion.h3
+                  animate={{ opacity: [0.6, 1, 0.6] }}
+                  transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+                  style={{
+                    fontFamily: FONT,
+                    fontSize: 18,
+                    fontWeight: 600,
+                    color: TEXT,
+                    margin: "0 0 8px",
+                  }}
+                >
+                  {thinkingPhrases[thinkingPhraseIndex]}
+                </motion.h3>
+                <p style={{ fontFamily: FONT, fontSize: 13, color: MUTED, margin: 0 }}>
+                  Baymax is formulating a response
+                </p>
+              </div>
             </motion.div>
           ) : showWords ? (
             <motion.div key="words"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }}
               exit={{ opacity: 0, filter: "blur(10px)" }}
               transition={{ duration: 0.6 }}
-              style={{ width: "100%", textAlign: "center", fontFamily: FONT, fontSize: "clamp(1.55rem, 3.8vw, 3.1rem)", lineHeight: 1.3, color: TEXT, fontWeight: 400, padding: "0 24px", paddingBottom: "80px" }}
+              style={{ width: "100%", display: "flex", flexDirection: "column", gap: 32, padding: "0 24px", paddingBottom: "80px" }}
             >
-              <TextEffect per="word" preset="blur">
-                {streamedWords.join(" ")}
-              </TextEffect>
+              {turns.map((turn, index) => {
+                const isActive = !turn.done && index === turns.length - 1;
+                return (
+                  <div 
+                    key={turn.id} 
+                    style={{
+                      width: "100%",
+                      textAlign: "center",
+                      fontFamily: FONT,
+                      fontSize: "clamp(1.55rem, 3.8vw, 3.1rem)",
+                      lineHeight: 1.3,
+                      color: TEXT,
+                      fontWeight: 400,
+                      opacity: isActive ? 1 : 0.45,
+                      filter: isActive ? "none" : "blur(0.5px)",
+                      transition: "opacity 0.4s, filter 0.4s",
+                    }}
+                  >
+                    {isActive ? (
+                      <TextEffect per="word" preset="blur">
+                        {turn.words.join(" ")}
+                      </TextEffect>
+                    ) : (
+                      <span>{turn.words.join(" ")}</span>
+                    )}
+                  </div>
+                );
+              })}
               <div ref={messagesEndRef} style={{ height: 1 }} />
             </motion.div>
           ) : showHint ? (
@@ -362,13 +787,24 @@ function SpeakView() {
         </AnimatePresence>
       </main>
 
-      {/* Bottom controls */}
       <motion.footer
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.7, delay: 0.25, ease: [0.16, 1, 0.3, 1] }}
         style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 22, paddingBottom: 52 }}
       >
+        {micError && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            style={{
+              background: "rgba(230,80,80,0.1)", border: "1px solid rgba(230,80,80,0.25)",
+              borderRadius: 10, padding: "8px 16px", maxWidth: 380, textAlign: "center",
+              fontFamily: FONT, fontSize: 12, color: "#c04040",
+            }}
+          >
+            {micError}
+          </motion.div>
+        )}
         <AnimatePresence>
           {state === "speaking" && (
             <motion.div
@@ -387,7 +823,7 @@ function SpeakView() {
             </motion.div>
           )}
         </AnimatePresence>
-        <Controls state={state} onStart={handleStart} onStop={handleStop} />
+        <Controls state={state} onStart={handleStart} onStop={handleStop} wsReady={wsReady} />
       </motion.footer>
     </div>
   );
@@ -396,6 +832,31 @@ function SpeakView() {
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [view, setView] = useState<AppView>("speak");
+  const { ws, wsReady } = useSharedWS(getWsUrl());
+  const [indexedDocs, setIndexedDocs] = useState<any[]>([]);
+  const [graphRefreshKey, setGraphRefreshKey] = useState(0);
+
+  // Root WebSocket listener to survive tab changes
+  useEffect(() => {
+    if (!ws) return;
+    const handler = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "indexed_docs") {
+          setIndexedDocs(data.docs ?? []);
+        } else if (data.type === "refresh_ncert_graph") {
+          setGraphRefreshKey((prev) => prev + 1);
+        }
+      } catch {}
+    };
+    ws.addEventListener("message", handler);
+    
+    // Initial fetch of doc list
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "get_indexed_docs" }));
+    }
+    return () => ws.removeEventListener("message", handler);
+  }, [ws]);
 
   return (
     <div
@@ -426,9 +887,9 @@ export default function App() {
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <SpeakView />
+            <SpeakView ws={ws} wsReady={wsReady} />
           </motion.div>
-        ) : (
+        ) : view === "graph" ? (
           <motion.div
             key="graph"
             style={{ flex: 1, display: "flex", flexDirection: "column", width: "100%", minHeight: 0 }}
@@ -437,7 +898,18 @@ export default function App() {
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <KnowledgeGraph />
+            <KnowledgeGraph ws={ws} refreshKey={graphRefreshKey} />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="textbooks"
+            style={{ flex: 1, display: "flex", flexDirection: "column", width: "100%", minHeight: 0, overflowY: "auto" }}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <TextbooksView ws={ws} indexedDocs={indexedDocs} setIndexedDocs={setIndexedDocs} />
           </motion.div>
         )}
       </AnimatePresence>

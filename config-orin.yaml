@@ -1,0 +1,39 @@
+# config-orin.yaml — Jetson Orin Nano Super 8GB configuration
+#
+# Copy this to config.yaml on the Orin:
+#   cp config-orin.yaml config.yaml
+#
+# Or export env vars to override without touching files:
+#   export ENGINE_BACKEND=llama_cpp
+#   export MODEL_PATH=models/qwen2.5-1.5b-instruct-q4_k_m.gguf
+#
+# Differences from Windows dev config:
+#   - engine.backend: litert  ->  llama_cpp  (litert-lm has no aarch64 CUDA wheel)
+#   - engine.model_path: Gemma E4B  ->  Qwen2.5-1.5B Q4_K_M GGUF (~1 GB)
+#   - engine.n_gpu_layers: 0  ->  -1  (full CUDA offload on Ampere GPU)
+#   - stt.compute_type: int8  ->  float16  (uses Tensor cores on Orin Ampere GPU)
+
+engine:
+  backend: ollama                                          # Ollama has its own bundled CUDA — no system CUDA toolkit needed
+  model_path: qwen2.5:3b                               # any model pulled via: ollama pull qwen2.5:3b
+  n_gpu_layers: -1                                         # ignored by ollama backend (it handles GPU automatically)
+
+stt:
+  backend: faster_whisper
+  model: small.en
+  compute_type: int8                                       # int8 CPU — avoids PyTorch CUDA dependency entirely
+                                                           # (change to float16 only after CUDA toolkit is installed)
+
+tts:
+  backend: piper
+  voice_path: assets/piper_voices/en_US-lessac-medium.onnx
+
+retrieval:
+  embed_backend: minilm
+  index_dir: data/index
+  k: 5                                                     # top-k chunks to inject — raised from 3 for richer RAG context
+  min_score: 0.25
+
+robot:
+  enabled: false
+  ip: ""
