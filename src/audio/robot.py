@@ -5,10 +5,16 @@ import random
 import logging
 import urllib.request
 import json
+import ssl
+
+# SSL context that ignores self-signed certificate errors
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 logger = logging.getLogger(__name__)
 
-WEBSERVER_URL = "http://localhost:8070"
+WEBSERVER_URL = "https://localhost:8070"
 
 
 def _http_post(url: str, body: bytes, content_type: str = "application/json", timeout: float = 3.0):
@@ -20,7 +26,7 @@ def _http_post(url: str, body: bytes, content_type: str = "application/json", ti
             data=body,
             headers={"Content-Type": content_type},
         )
-        with urllib.request.urlopen(req, timeout=timeout):
+        with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX):
             pass
     except Exception as e:
         logger.debug("[Robot HTTP] %s → %s", url, e)
@@ -70,7 +76,7 @@ class RobotController:
                 data=body,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=5, context=_SSL_CTX) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
                 print(f"[Robot] Webserver connect → {result.get('status', 'ok')}", flush=True)
         except Exception as e:
