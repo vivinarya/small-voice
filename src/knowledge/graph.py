@@ -30,9 +30,16 @@ def fast_wiki_router(user_speech: str) -> str:
             with open(path, "r", encoding="utf-8") as f:
                 matched_contents.append(f.read())
                 
-    # Check principal keywords
-    if any(kw in user_speech_lower for kw in ["principal", "roopa", "sridhar", "leadership", "head"]):
-        path = os.path.join(wiki_dir, "roopa-sridhar.md")
+    # Check principal / leadership keywords
+    if any(kw in user_speech_lower for kw in [
+        "principal", "director", "roopa", "vandana", "sanjay",
+        "dean", "charulatha", "prakaash",
+        "gopalkrishna", "santhamma", "bindu", "vikram", "viswanath",
+        "chaitra", "harsha", "edufrontiers",
+        "elsie", "thomas", "reeta", "tikoo", "sreeparvathy", "panicker",
+        "leadership", "head", "mentor", "staff", "management",
+    ]):
+        path = os.path.join(wiki_dir, "nps-itpl.md")
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 matched_contents.append(f.read())
@@ -84,11 +91,26 @@ def autocorrect_stt(text: str) -> str:
         "roopa shridhar": "Mrs. Roopa Sridhar",
         "rupa sridhar": "Mrs. Roopa Sridhar",
         "rupa shridhar": "Mrs. Roopa Sridhar",
+        "vandana sanjay": "Mrs. Vandana Sanjay",
+        "vandana sanje": "Mrs. Vandana Sanjay",
+        "charulatha": "Mrs. Charulatha Prakaash",
+        "charulata": "Mrs. Charulatha Prakaash",
+        "charulatha prakash": "Mrs. Charulatha Prakaash",
+        "sreeparvathy": "Mrs. Sreeparvathy Panicker",
+        "sriparvathy": "Mrs. Sreeparvathy Panicker",
+        "sreeparvati": "Mrs. Sreeparvathy Panicker",
+        "reeta tikoo": "Mrs. Reeta Tikoo",
+        "rita tikoo": "Mrs. Reeta Tikoo",
+        "elsie thomas": "Mrs. Elsie Thomas",
         "k g garg": "Mr. K. G. Garg",
         "k. g. garg": "Mr. K. G. Garg",
         "gopalkrishna": "Dr. K. P. Gopalkrishna",
         "kp gopalkrishna": "Dr. K. P. Gopalkrishna",
         "k p gopalkrishna": "Dr. K. P. Gopalkrishna",
+        "santhamma": "Dr. Santhamma Gopalkrishna",
+        "bindu hari": "Dr. Bindu Hari",
+        "vikram viswanath": "Mr. Vikram Viswanath",
+        "chaitra harsha": "Dr. Chaitra Harsha",
         # NCERT science/math domain terms — common Whisper mis-transcriptions
         # (additive: does not change non-buggy transcripts)
         "photo synthesis": "photosynthesis",

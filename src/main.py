@@ -68,6 +68,29 @@ async def ws_handler(websocket):
             elif data.get("type") == "ping":
                 # Heartbeat from browser — keep connection alive through ngrok idle timeout
                 await websocket.send(json.dumps({"type": "pong"}))
+            elif data.get("type") == "chat_message":
+                # Text input from the chat box in the UI — skip STT, go directly to LLM pipeline.
+                # This is the fix for the robot not receiving any input when voice is unavailable.
+                user_text = data.get("text", "").strip()
+                if not user_text:
+                    pass  # ignore empty sends
+                else:
+                    active_engine    = _app_state.get("engine",    None)
+                    active_tts       = _app_state.get("tts",       None)
+                    active_retrieval = _app_state.get("retrieval",  None)
+                    if active_engine is None or active_tts is None or active_retrieval is None:
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "message": "Backend models not ready yet — please wait a moment."
+                        }))
+                    else:
+                        shutdown_ev = asyncio.Event()
+                        asyncio.create_task(
+                            _handle_text_chat(
+                                user_text, active_engine, active_tts, active_retrieval, shutdown_ev
+                            )
+                        )
+
             elif data.get("type") == "browser_audio":
                 # Audio captured by the browser mic and sent as base64 WebM/WAV.
                 # Decode, convert to float32 PCM, run STT + full response pipeline.
@@ -965,7 +988,195 @@ async def _get_context_chunks(text: str, active_retrieval, wiki_context: str) ->
                 
     return chunks
 
+
+async def _handle_text_chat(
+    user_text: str,
+    engine: "BaseEngine",
+    tts: "BaseTTS",
+    retrieval,
+    shutdown_event: asyncio.Event,
+) -> None:
+    """Handle plain-text input from the chat box UI.
+
+    Bypasses STT entirely — text arrives directly from the frontend WebSocket
+    as a 'chat_message' event. Runs the full RAG → LLM → TTS → robot pipeline
+    and broadcasts audio + streaming text back to all connected clients.
+    This is the primary fix for the robot not receiving any input externally.
+    """
+    import traceback as _tb, base64 as _b64, time as _time
+    try:
+        print(f"\nUser (chat): {user_text}", flush=True)
+        await broadcast({"type": "state", "state": "processing"})
+        await broadcast({"type": "text", "text": ""})  # clear previous turn
+
+        from inference.prompt_builder import build_prompt, build_page_prompt
+        from retrieval.query_router import (
+            parse_page_number, is_book_list_query, extract_book_name_query,
+            format_book_list, answer_book_query,
+        )
+        loop = asyncio.get_running_loop()
+        active_retrieval = _app_state.get("retrieval", retrieval)
+        assert active_retrieval is not None
+
+        async def _speak(answer: str) -> None:
+            """Synthesize and broadcast TTS audio + text to all clients + robot."""
+            print(f"\nBaymax: {answer}", flush=True)
+            await broadcast({"type": "text", "text": ""})
+            await broadcast({"type": "text", "text": answer})
+            pcm = await asyncio.to_thread(tts._synthesize_to_pcm, answer)
+            if pcm is not None:
+                wav_bytes = _pcm_to_wav_bytes(pcm, tts.samplerate)
+                audio_b64 = _b64.b64encode(wav_bytes).decode("utf-8")
+                await broadcast({"type": "audio_out", "audio_b64": audio_b64})
+                # Send audio to the robot if connected
+                if robot_controller and robot_controller.enabled:
+                    await asyncio.to_thread(robot_controller.play_audio, wav_bytes)
+            await broadcast({"type": "state", "state": "idle"})
+
+        # ── Identity / special queries ────────────────────────────────────────
+        if _is_who_are_you_query(user_text):
+            await _speak(
+                "Hi, I am Baymax, your AI assistant at NPS ITPL. "
+                "I can answer questions about the school, academics, events, and more."
+            )
+            return
+
+        # ── Book-list / page queries ─────────────────────────────────────────
+        try:
+            sources = active_retrieval.list_sources()
+        except Exception:
+            sources = []
+
+        if is_book_list_query(user_text):
+            await _speak(format_book_list(sources))
+            return
+        bq = extract_book_name_query(user_text)
+        if bq is not None:
+            await _speak(answer_book_query(bq, sources))
+            return
+        page_no = parse_page_number(user_text)
+        page_chunks = []
+        if page_no is not None and sources:
+            try:
+                page_chunks = active_retrieval.get_page(page_no)
+            except Exception:
+                page_chunks = []
+            if not page_chunks:
+                await _speak(f"I couldn't find page {page_no} in the uploaded documents.")
+                return
+
+        # ── Answer cache ─────────────────────────────────────────────────────
+        cached = active_retrieval.cache_get(user_text)
+        if cached:
+            await _speak(cached.answer_text)
+            return
+
+        # ── Prompt assembly ──────────────────────────────────────────────────
+        if page_no is not None and page_chunks:
+            prompt_text = build_page_prompt(user_text, page_no, page_chunks)
+        else:
+            from knowledge.graph import fast_wiki_router
+            wiki_context = fast_wiki_router(user_text)
+            chunks = await _get_context_chunks(user_text, active_retrieval, wiki_context)
+            prompt_text = build_prompt(user_text, chunks)
+
+        # ── LLM streaming ────────────────────────────────────────────────────
+        await broadcast({"type": "state", "state": "speaking"})
+        t_llm = _time.perf_counter()
+        try:
+            engine.reset()
+        except Exception:
+            pass
+        stream = engine.get_stream(prompt_text)
+
+        full_text_parts: list[str] = []
+        first_token = True
+
+        def _collect_and_broadcast():
+            nonlocal first_token
+            for chunk in stream:
+                if first_token:
+                    ttft_ms = int((_time.perf_counter() - t_llm) * 1000)
+                    print(f"\r\033[2K\033[2m[TTFT: {ttft_ms}ms]\033[0m")
+                    first_token = False
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        broadcast({"type": "text", "text": chunk}), loop
+                    )
+                except Exception:
+                    pass
+                full_text_parts.append(chunk)
+                yield chunk
+
+        print("Baymax: ", end="", flush=True)
+
+        # ── TTS streaming sentence-by-sentence ───────────────────────────────
+        def _stream_tts():
+            from synthesis.text_norm import extract_complete_sentences
+            buf = ""
+            full_text = ""
+            pending_short = ""
+            SHORT_THRESH = 3
+
+            def _synth_and_send(sentence: str):
+                cleaned = sentence.strip()
+                if not cleaned:
+                    return
+                pcm = tts._synthesize_to_pcm(cleaned)
+                if pcm is not None:
+                    wav_bytes = _pcm_to_wav_bytes(pcm, tts.samplerate)
+                    audio_b64 = _b64.b64encode(wav_bytes).decode("utf-8")
+                    asyncio.run_coroutine_threadsafe(
+                        broadcast({"type": "audio_out", "audio_b64": audio_b64}), loop
+                    )
+                    # Robot audio: fire and don't wait (non-blocking for streaming)
+                    if robot_controller and robot_controller.enabled:
+                        asyncio.run_coroutine_threadsafe(
+                            asyncio.to_thread(robot_controller.play_audio, wav_bytes), loop
+                        )
+
+            for chunk in _collect_and_broadcast():
+                if not chunk:
+                    continue
+                print(chunk, end="", flush=True)
+                buf += chunk
+                full_text += chunk
+                results = extract_complete_sentences(buf)
+                if results:
+                    sentence, buf = results[0]
+                    if sentence.strip():
+                        wc = len(sentence.split())
+                        if not pending_short and wc <= SHORT_THRESH:
+                            pending_short = sentence
+                        else:
+                            to_speak = (pending_short + " " + sentence).strip() if pending_short else sentence
+                            pending_short = ""
+                            _synth_and_send(to_speak)
+
+            remaining = (pending_short + " " + buf).strip() if pending_short else buf.strip()
+            if remaining:
+                _synth_and_send(remaining)
+            print()
+            return full_text.strip()
+
+        full_text = await asyncio.to_thread(_stream_tts)
+        active_retrieval.cache_put(user_text, full_text)
+        total_ms = int((_time.perf_counter() - t_llm) * 1000)
+        print(f"\n\033[2m[Chat → Gen+Speech: {total_ms}ms]\033[0m")
+        await broadcast({"type": "state", "state": "idle"})
+
+    except Exception as exc:
+        print(f"\n[ERROR] in _handle_text_chat: {exc}", flush=True)
+        _tb.print_exc()
+        try:
+            await broadcast({"type": "error", "message": f"Error: {exc}"})
+            await broadcast({"type": "state", "state": "idle"})
+        except Exception:
+            pass
+
+
 async def _handle_browser_response(
+
     audio_np,
     engine: "BaseEngine",
     tts: "BaseTTS",

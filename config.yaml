@@ -8,9 +8,9 @@
 #   EMBED_BACKEND, INDEX_DIR, RETRIEVAL_K
 
 engine:
-  backend: litert                          # litert | llama_cpp
-  model_path: assets/gemma-4-E4B-it.litertlm
-  n_gpu_layers: 0                          # ignored by litert; -1 = full CUDA offload on Orin
+  backend: ollama                          # litert | llama_cpp | ollama
+  model_path: qwen2.5:1.5b               # model name as shown in `ollama list`
+  n_gpu_layers: 0                          # ignored by ollama (it manages GPU internally)
 
 stt:
   backend: faster_whisper                  # whisper | faster_whisper

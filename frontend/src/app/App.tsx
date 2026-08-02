@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Square } from "lucide-react";
+import { Mic, Square, Send } from "lucide-react";
 import { KnowledgeGraph } from "./components/KnowledgeGraph";
 import { TextbooksView } from "./components/TextbooksView";
 import { TextEffect } from "./components/TextEffect";
@@ -332,6 +332,102 @@ function Controls({
         </AnimatePresence>
       </motion.button>
     </div>
+  );
+}
+
+// ─── Chat text input (backup to voice) ────────────────────────────────────────
+function ChatInput({
+  ws,
+  wsReady,
+  isBusy,
+}: {
+  ws: WebSocket | null;
+  wsReady: boolean;
+  isBusy: boolean;
+}) {
+  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const canSend = wsReady && !isBusy && text.trim().length > 0;
+
+  const handleSend = useCallback(() => {
+    if (!canSend || !ws) return;
+    const msg = text.trim();
+    setText("");
+    ws.send(JSON.stringify({ type: "chat_message", text: msg }));
+    inputRef.current?.focus();
+  }, [canSend, ws, text]);
+
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") handleSend();
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        width: "min(480px, 90vw)",
+        background: "rgba(255,255,255,0.42)",
+        backdropFilter: "blur(18px)",
+        WebkitBackdropFilter: "blur(18px)",
+        border: "1px solid rgba(255,255,255,0.82)",
+        borderRadius: 100,
+        padding: "6px 6px 6px 20px",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.055), 0 1px 3px rgba(0,0,0,0.04)",
+      }}
+    >
+      <input
+        ref={inputRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={handleKey}
+        disabled={isBusy || !wsReady}
+        placeholder={isBusy ? "Baymax is responding…" : !wsReady ? "Connecting…" : "or type a message"}
+        style={{
+          flex: 1,
+          background: "transparent",
+          border: "none",
+          outline: "none",
+          fontFamily: FONT,
+          fontSize: 13.5,
+          fontWeight: 400,
+          color: TEXT,
+          letterSpacing: "0.01em",
+          opacity: isBusy || !wsReady ? 0.5 : 1,
+        }}
+      />
+      <motion.button
+        id="chat-send-btn"
+        onClick={handleSend}
+        disabled={!canSend}
+        whileHover={canSend ? { scale: 1.06 } : {}}
+        whileTap={canSend ? { scale: 0.94 } : {}}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 36,
+          height: 36,
+          borderRadius: "50%",
+          background: canSend ? MINT : "rgba(0,0,0,0.07)",
+          border: "none",
+          cursor: canSend ? "pointer" : "default",
+          outline: "none",
+          flexShrink: 0,
+          transition: "background 0.2s ease",
+        }}
+      >
+        <Send
+          size={14}
+          strokeWidth={2.2}
+          color={canSend ? "#1e1d1b" : "rgba(117,112,104,0.35)"}
+        />
+      </motion.button>
+    </motion.div>
   );
 }
 
@@ -824,6 +920,9 @@ function SpeakView({ ws, wsReady }: { ws: WebSocket | null; wsReady: boolean }) 
           )}
         </AnimatePresence>
         <Controls state={state} onStart={handleStart} onStop={handleStop} wsReady={wsReady} />
+
+        {/* ── Chat text input (backup to voice) ─────────────────────────── */}
+        <ChatInput ws={ws} wsReady={wsReady} isBusy={state === "processing" || state === "speaking"} />
       </motion.footer>
     </div>
   );

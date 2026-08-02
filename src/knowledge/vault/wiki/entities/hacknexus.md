@@ -1,30 +1,33 @@
 ---
-type: entity
-category: Event
-last_updated: 2026-07-20
+entity: hacknexus
+type: event
 ---
 # HackNexus 2026
-**Summary**: The inaugural interschool Model, Simulate, Code and Pitch Expo hosted at [[National Public School ITPL]].
 
-## Quick Facts
-- Host Venue: [[National Public School ITPL]]
-- Tagline: Where innovation connects with technology
-- Objective: Cultivate technological excellence, curiosity, and responsible innovation
-- Audience: School students, educators, and trainers
+HackNexus 2026 is a national-level technology hackathon that NPS ITPL has promoted and participated in. It is organized in association with Droidecks and focuses on solving real-world challenges through innovative technology solutions.
 
-## Event Divisions
-- **Smartscape (Grades 5 - 6)**: Design thinking and model building challenge
-- **Robo Sweep (Grades 5 - 6)**: Clean-up and sweep robotics challenge
-- **RoboCrafter X (Grades 7 - 8)**: Robotics craft and code challenge
-- **SafeHaven Nexus (Grades 7 - 8)**: Safety and disaster simulation challenge
-- **RoboRush (Grades 7 - 8)**: High-speed robotics racing challenge
-- **PyPulse (Grades 9 - 12)**: Python coding and algorithm challenge
-- **Innovatrix (Grades 9 - 12)**: Innovation pitch and entrepreneurship expo
-- **TechTurf (Grades 9 - 12)**: Advanced tech application expo
+## Event Overview
+- Event Name: HackNexus 2026 (also written as HackNexus '26)
+- Type: National-level online hackathon
+- Organizer: Droidecks
+- School Connection: NPS ITPL has promoted this event for its students and announced it on the official school website
+- Prize Pool: Rupees 70,000
+- Format: Fully online, open to college and university students across India
 
-## Context
-During HackNexus 2026, the offline edge assistant [[Baymax]] is showcased in real-time, helping students and trainers interact with advanced AI without internet dependence.
+## Eligibility
+- Open to all college and university students in India
+- Teams of 2 to 4 members per entry
+- Registration Deadline: July 15, 2026
 
-## Related Nodes
-- [[National Public School ITPL]]
-- [[Baymax]]
+## Focus Areas
+The hackathon challenges participants to solve real-world problems through technology, with themes including artificial intelligence, robotics, sustainability, health tech, and smart city solutions.
+
+## NPS ITPL Connection
+HackNexus 2026 was announced and listed under the Events section on the NPS ITPL official website. The school actively encourages its senior students and alumni to participate in such national-level technology competitions as part of its commitment to fostering innovation and entrepreneurial thinking.
+
+## Related NPS ITPL Technology Initiatives
+As part of its technology focus, NPS ITPL has also:
+- Hosted a Robotics Expo on January 31, 2026 where students demonstrated the Reachy Mini humanoid robot powered by an AI voice assistant
+- Organized TEDxNPSITPL Youth 2026 on July 24, 2026 where students presented on technology and innovation themes
+- Established a robotics and innovation lab on campus
+- Partnered with technology companies to bring cutting-edge demonstrations to the school
