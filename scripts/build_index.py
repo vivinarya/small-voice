@@ -1,16 +1,23 @@
 #!/usr/bin/env python
-"""build_index.py — Build a FAISS retrieval index from any PDFs.
+"""build_index.py — Build the RAG retrieval index from any PDFs.
 
 Usage:
+    # Build ChromaDB index (default, recommended):
     python scripts/build_index.py
-    python scripts/build_index.py --src data/docs --out data/index --embed minilm
+    python scripts/build_index.py --src data/docs --out data/chroma
+
+    # Build legacy FAISS index:
+    python scripts/build_index.py --backend faiss --out data/index
 
 Drop any PDFs (academic, textbooks, manuals, reports, anything) under the
 source directory.  No folder structure is required — all PDFs are found
 recursively and indexed by document name + page number.
 
+The ChromaDB database at --out persists across reboots automatically.
+Only run this script once, or re-run to add new documents.
+
 Prerequisites:
-    pip install sentence-transformers faiss-cpu pypdf
+    pip install sentence-transformers chromadb pypdf
 """
 from __future__ import annotations
 
@@ -37,7 +44,6 @@ except Exception:
     pass
 
 from retrieval.embedder import build_embedder
-from retrieval.faiss_index import FAISSIndex
 from retrieval.ingest import discover, ingest_pdf
 
 logging.basicConfig(
@@ -50,7 +56,7 @@ logger = logging.getLogger("build_index")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build FAISS retrieval index from any PDF documents."
+        description="Build the RAG retrieval index (ChromaDB or FAISS) from PDF documents."
     )
     parser.add_argument(
         "--src",
@@ -59,14 +65,20 @@ def main() -> None:
     )
     parser.add_argument(
         "--out",
-        default="data/index",
-        help="Output directory for index artifacts (default: data/index)",
+        default="data/chroma",
+        help="Output directory for the index (default: data/chroma)",
     )
     parser.add_argument(
         "--embed",
         default="minilm",
         choices=["minilm", "bge_small"],
-        help="Embedding backend (default: minilm)",
+        help="Embedding model (default: minilm)",
+    )
+    parser.add_argument(
+        "--backend",
+        default="chroma",
+        choices=["chroma", "faiss"],
+        help="Vector store backend (default: chroma). Use 'faiss' for legacy FAISS index.",
     )
     args = parser.parse_args()
 
@@ -74,7 +86,7 @@ def main() -> None:
     out_dir = os.path.abspath(args.out)
 
     logger.info("=" * 60)
-    logger.info("FAISS Index Builder")
+    logger.info("RAG Index Builder — backend: %s", args.backend.upper())
     logger.info("  Source  : %s", src_dir)
     logger.info("  Output  : %s", out_dir)
     logger.info("  Embedder: %s", args.embed)
@@ -107,18 +119,37 @@ def main() -> None:
     logger.info("Loading embedder '%s'...", args.embed)
     embedder = build_embedder(args.embed)
 
-    # 4. Build and persist FAISS index
-    logger.info("Building FAISS index...")
+    # 4. Build and persist the index
     t1 = time.perf_counter()
-    idx = FAISSIndex.build(all_chunks, embedder, out_dir)
-    elapsed = time.perf_counter() - t1
 
-    logger.info("=" * 60)
-    logger.info("Index built successfully!")
-    logger.info("  Vectors : %d", idx.ntotal)
-    logger.info("  Elapsed : %.1fs", elapsed)
-    logger.info("  Output  : %s", out_dir)
-    logger.info("=" * 60)
+    if args.backend == "chroma":
+        from retrieval.chroma_index import ChromaIndex  # noqa: PLC0415
+        logger.info("Building ChromaDB index...")
+        idx = ChromaIndex.build(all_chunks, embedder, out_dir)
+        elapsed = time.perf_counter() - t1
+
+        logger.info("=" * 60)
+        logger.info("ChromaDB index built successfully!")
+        logger.info("  Chunks  : %d", idx.ntotal)
+        logger.info("  Elapsed : %.1fs", elapsed)
+        logger.info("  Output  : %s", out_dir)
+        logger.info("")
+        logger.info("The database persists automatically. Restart the assistant")
+        logger.info("and it will load instantly — no rebuild needed on reboot.")
+        logger.info("=" * 60)
+
+    else:
+        from retrieval.faiss_index import FAISSIndex  # noqa: PLC0415
+        logger.info("Building FAISS index (legacy)...")
+        idx = FAISSIndex.build(all_chunks, embedder, out_dir)
+        elapsed = time.perf_counter() - t1
+
+        logger.info("=" * 60)
+        logger.info("FAISS index built successfully!")
+        logger.info("  Vectors : %d", idx.ntotal)
+        logger.info("  Elapsed : %.1fs", elapsed)
+        logger.info("  Output  : %s", out_dir)
+        logger.info("=" * 60)
 
 
 if __name__ == "__main__":

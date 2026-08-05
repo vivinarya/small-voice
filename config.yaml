@@ -1,11 +1,11 @@
 # config.yaml — Pluggable Edge Assistant configuration
-# Windows / development defaults (LiteRT-LM, Whisper, Piper)
+# Windows / development defaults (Ollama, Whisper, Piper)
 #
 # Environment variable overrides (highest precedence, no file edit needed):
 #   ENGINE_BACKEND, MODEL_PATH, N_GPU_LAYERS
 #   STT_BACKEND, STT_MODEL
 #   TTS_BACKEND, TTS_VOICE_PATH
-#   EMBED_BACKEND, INDEX_DIR, RETRIEVAL_K
+#   RETRIEVAL_BACKEND, EMBED_BACKEND, INDEX_DIR, RETRIEVAL_K
 
 engine:
   backend: ollama                          # litert | llama_cpp | ollama
@@ -32,8 +32,9 @@ tts:
   voice_path: assets/piper_voices/en_US-lessac-medium.onnx
 
 retrieval:
+  backend: chroma                          # chroma (recommended) | faiss (legacy)
   embed_backend: minilm                    # minilm | bge_small
-  index_dir: data/index
+  index_dir: data/chroma                  # ChromaDB persistent folder
   k: 3                                     # top-k chunks to inject (1-5)
   min_score: 0.25                          # relevance gate: chunks below this score are excluded (cosine similarity)
 

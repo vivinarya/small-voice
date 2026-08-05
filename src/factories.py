@@ -71,27 +71,59 @@ def build_tts(cfg: AppConfig) -> BaseTTS:
 
 def build_retrieval(cfg: AppConfig):
     """Instantiate and return the configured RetrievalService.
-    
-    Returns a no-op NullRetrievalService if the FAISS index doesn't exist yet,
-    so the assistant still works without the RAG layer built.
+
+    Backend selection (config.yaml  retrieval.embed_backend):
+      chroma  — ChromaDB persistent DB (default, recommended)
+      faiss   — Legacy FAISS binary index (backward-compat)
+
+    Falls back to NullRetrievalService if the index directory / files are
+    missing, so the assistant still starts without RAG while you build the index.
     """
     import os  # noqa: PLC0415
-    
+    from pathlib import Path  # noqa: PLC0415
+
     index_dir = cfg.index_dir
+    retrieval_backend = cfg.retrieval_backend  # "chroma" | "faiss"
+
+    # ── ChromaDB path ──────────────────────────────────────────────────────
+    if retrieval_backend == "chroma":
+        chroma_db_file = os.path.join(index_dir, "chroma.sqlite3")
+        if not os.path.exists(chroma_db_file):
+            logger.warning(
+                "ChromaDB database not found at '%s'. RAG disabled. "
+                "Build the index first:\n"
+                "  python scripts/build_index.py --src data/docs --out %s",
+                chroma_db_file, index_dir,
+            )
+            from retrieval.service import NullRetrievalService  # noqa: PLC0415
+            return NullRetrievalService()
+
+        from retrieval.service import ChromaRetrievalService  # noqa: PLC0415
+        from retrieval.embedder import MiniLMEmbedder  # noqa: PLC0415
+
+        logger.info("Building ChromaRetrievalService from '%s'", index_dir)
+        embedder = MiniLMEmbedder()
+        return ChromaRetrievalService(
+            index_dir=index_dir,
+            embedder=embedder,
+            min_score=cfg.min_score,
+        )
+
+    # ── Legacy FAISS path (backward-compat) ───────────────────────────────
     faiss_index_path = os.path.join(index_dir, "faiss.index")
-    
     if not os.path.exists(faiss_index_path):
         logger.warning(
             "FAISS index not found at '%s'. RAG disabled. "
-            "Run: python scripts/build_index.py --src data/docs --out data/index",
-            faiss_index_path,
+            "Switch to ChromaDB (retrieval.embed_backend: chroma) or rebuild:\n"
+            "  python scripts/build_index.py --src data/docs --out %s",
+            faiss_index_path, index_dir,
         )
         from retrieval.service import NullRetrievalService  # noqa: PLC0415
         return NullRetrievalService()
-    
+
     from retrieval.service import FAISSRetrievalService  # noqa: PLC0415
     from retrieval.embedder import MiniLMEmbedder  # noqa: PLC0415
-    
-    logger.info("Building FAISSRetrievalService from '%s'", index_dir)
+
+    logger.info("Building FAISSRetrievalService (legacy) from '%s'", index_dir)
     embedder = MiniLMEmbedder()
     return FAISSRetrievalService(index_dir=index_dir, embedder=embedder, min_score=cfg.min_score)

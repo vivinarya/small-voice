@@ -7,9 +7,11 @@ Priority (highest to lowest):
   3. Hardcoded defaults (as fallback within the YAML parsing)
 
 Validation rules (fail-fast at startup):
-  - engine_backend ∈ {"litert", "llama_cpp"}
+  - engine_backend ∈ {"litert", "llama_cpp", "ollama"}
   - stt_backend ∈ {"whisper", "faster_whisper"}
   - tts_backend ∈ {"piper", "kokoro"}
+  - retrieval_backend ∈ {"chroma", "faiss"}
+  - embed_backend ∈ {"minilm", "bge_small"}
   - retrieval_k ∈ [1, 5] (clamped)
   - n_gpu_layers is integer
 """
@@ -23,6 +25,7 @@ _VALID_ENGINE  = {"litert", "llama_cpp", "ollama"}
 _VALID_STT     = {"whisper", "faster_whisper"}
 _VALID_TTS     = {"piper", "kokoro"}
 _VALID_EMBED   = {"minilm", "bge_small"}
+_VALID_RETRIEVAL = {"chroma", "faiss"}
 
 
 @dataclass(frozen=True)
@@ -38,10 +41,11 @@ class AppConfig:
     tts_backend: str      # "piper" | "kokoro"
     tts_voice_path: str
 
-    embed_backend: str    # "minilm" | "bge_small"
+    embed_backend: str      # "minilm" | "bge_small"
+    retrieval_backend: str  # "chroma" | "faiss"  — which vector store to use
     index_dir: str
-    retrieval_k: int      # 1..5
-    min_score: float      # relevance gate for retrieved chunks (cosine similarity, default 0.25)
+    retrieval_k: int        # 1..5
+    min_score: float        # relevance gate for retrieved chunks (cosine similarity, default 0.25)
 
     robot_enabled: bool = False   # control Reachy Mini robot
     robot_ip: str = ""            # IP address of the robot Pi Zero
@@ -82,6 +86,11 @@ def _validate(cfg: AppConfig) -> None:
         raise ValueError(
             f"retrieval.embed_backend '{cfg.embed_backend}' is invalid. "
             f"Choose one of: {sorted(_VALID_EMBED)}"
+        )
+    if cfg.retrieval_backend not in _VALID_RETRIEVAL:
+        raise ValueError(
+            f"retrieval.backend '{cfg.retrieval_backend}' is invalid. "
+            f"Choose one of: {sorted(_VALID_RETRIEVAL)}"
         )
 
 
@@ -142,13 +151,17 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     )
 
     # --- Retrieval ---
+    retrieval_backend = (
+        os.environ.get("RETRIEVAL_BACKEND")
+        or retrieval_sect.get("backend", "chroma")   # default: ChromaDB
+    )
     embed_backend = (
         os.environ.get("EMBED_BACKEND")
         or retrieval_sect.get("embed_backend", "minilm")
     )
     index_dir = (
         os.environ.get("INDEX_DIR")
-        or retrieval_sect.get("index_dir", "data/index")
+        or retrieval_sect.get("index_dir", "data/chroma")
     )
     try:
         raw_k = int(
@@ -193,6 +206,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         tts_backend=tts_backend,
         tts_voice_path=tts_voice_path,
         embed_backend=embed_backend,
+        retrieval_backend=retrieval_backend,
         index_dir=index_dir,
         retrieval_k=retrieval_k,
         min_score=min_score,

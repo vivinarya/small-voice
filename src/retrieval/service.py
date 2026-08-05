@@ -1,8 +1,9 @@
 # src/retrieval/service.py
 """Concrete RetrievalService implementations.
 
-FAISSRetrievalService: full RAG — embed query → FAISS search → filter → cache
-NullRetrievalService:  no-op for when index hasn't been built yet (graceful degradation)
+ChromaRetrievalService: full RAG — embed query → ChromaDB cosine search → filter → cache
+FAISSRetrievalService:  full RAG — embed query → FAISS search → filter → cache (legacy)
+NullRetrievalService:   no-op for when index hasn't been built yet (graceful degradation)
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from .base import CachedAnswer, RetrievalService, RetrievedChunk
 from .cache import AnswerCache
 from .embedder import Embedder
 from .faiss_index import FAISSIndex
+from .chroma_index import ChromaIndex
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,73 @@ class FAISSRetrievalService(RetrievalService):
         return self._index.list_sources()
 
     def get_page(self, page: int, source: Optional[str] = None):
+        """Return all chunks on the given page (optionally filtered by source)."""
+        return self._index.get_page(page, source)
+
+
+class ChromaRetrievalService(RetrievalService):
+    """Full RAG retrieval using ChromaDB + sentence-transformer embeddings.
+
+    Pipeline per query:
+      1. Embed query with Embedder (L2-normalized, shape (1, dim))
+      2. Query ChromaDB collection for top-k results (cosine similarity)
+      3. Filter by min_score threshold
+      4. Return RetrievedChunk list with citations
+
+    The ChromaDB collection persists automatically to index_dir/ on disk,
+    so it survives restarts with zero rebuild cost.
+    """
+
+    def __init__(
+        self,
+        index_dir: str,
+        embedder: Embedder,
+        cache_max_entries: int = 256,
+        min_score: float | None = None,
+    ) -> None:
+        from .embedder import MIN_SCORE as _DEFAULT_MIN_SCORE  # noqa: PLC0415
+        self._embedder = embedder
+        self._min_score: float = _DEFAULT_MIN_SCORE if min_score is None else min_score
+        self._index = ChromaIndex.load(index_dir)
+        cache_dir = os.path.join(index_dir, "cache")
+        self._cache = AnswerCache(cache_dir=cache_dir, max_entries=cache_max_entries)
+        logger.info(
+            "ChromaRetrievalService ready: %d chunks, %d cache entries, min_score=%.2f",
+            self._index.ntotal,
+            len(self._cache),
+            self._min_score,
+        )
+
+    def retrieve(self, query: str, k: int = 3) -> list[RetrievedChunk]:
+        """Embed query and return top-k relevant chunks from ChromaDB.
+
+        Preconditions: 1 <= k <= 5
+        Postconditions: <= k results, sorted desc by score, score in [0,1]
+        """
+        k = max(1, min(5, k))
+
+        if self._index.ntotal == 0:
+            return []
+
+        qv = self._embedder.embed([query])   # shape (1, dim), L2-normalized
+        results = self._index.search(qv, k, min_score=self._min_score)
+
+        logger.debug("ChromaDB retrieved %d chunks for query '%s...'", len(results), query[:50])
+        return results
+
+    def cache_get(self, query: str) -> CachedAnswer | None:
+        """Return cached answer for query, or None."""
+        return self._cache.get(query)
+
+    def cache_put(self, query: str, answer: str, audio_pcm: bytes | None = None) -> None:
+        """Cache an answer for future instant replay."""
+        self._cache.put(query, answer, audio_pcm=audio_pcm)
+
+    def list_sources(self) -> list[dict]:
+        """Return indexed documents as {source, page_count, chunk_count}."""
+        return self._index.list_sources()
+
+    def get_page(self, page: int, source: str | None = None):
         """Return all chunks on the given page (optionally filtered by source)."""
         return self._index.get_page(page, source)
 

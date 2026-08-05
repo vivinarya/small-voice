@@ -29,8 +29,9 @@ tts:
   voice_path: assets/piper_voices/en_US-lessac-medium.onnx
 
 retrieval:
+  backend: chroma                                          # ChromaDB — persistent SQLite-backed vector DB
   embed_backend: minilm
-  index_dir: data/index
+  index_dir: data/chroma                                  # survives reboots, no rebuild needed
   k: 5                                                     # top-k chunks to inject — raised from 3 for richer RAG context
   min_score: 0.25
 
